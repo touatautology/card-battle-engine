@@ -1,0 +1,18 @@
+{
+  "seed": 42,
+  "max_promotions_per_run": 10,
+  "on_id_conflict": "fail",
+  "benchmark": {
+    "method": "vs_elite_pool",
+    "matches_per_pair": 2,
+    "policies": {
+      "candidates": [{"name": "greedy", "weight": 0.6}, {"name": "simple", "weight": 0.3}, {"name": "random", "weight": 0.1}],
+      "opponents": [{"name": "greedy", "weight": 0.7}, {"name": "simple", "weight": 0.3}]
+    }
+  },
+  "gate": {
+    "max_matchup_winrate": 0.95,
+    "turns_delta_ratio": 0.20,
+    "mana_wasted_delta_ratio": 0.20
+  }
+}

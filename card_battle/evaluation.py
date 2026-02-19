@@ -232,6 +232,63 @@ def _evaluate_multi_policy(
     return fitness
 
 
+def evaluate_targets(
+    targets: list[DeckDef],
+    card_db: dict[str, Card],
+    seed: int,
+    matches_per_eval: int,
+    policy_mix: PolicyMix | None,
+    collect_telemetry: bool = True,
+) -> dict[str, Any]:
+    """Evaluate all target decks against each other (round-robin).
+
+    Returns {"win_rates_by_target": {...}, "overall_win_rate": float, "summaries": [...]}.
+    """
+    results: dict[str, Any] = {}
+    all_summaries: list[dict[str, Any]] = []
+
+    for deck in targets:
+        opponents = [d for d in targets if d.deck_id != deck.deck_id]
+        if not opponents:
+            results[deck.deck_id] = 0.5
+            continue
+        out = evaluate_deck_vs_pool(
+            deck, opponents, card_db, seed, 0, matches_per_eval,
+            collect_telemetry=collect_telemetry,
+            policy_mix=policy_mix,
+        )
+        if collect_telemetry:
+            wr, sums = out  # type: ignore[misc]
+            all_summaries.extend(sums)
+        else:
+            wr = out  # type: ignore[assignment]
+        results[deck.deck_id] = wr
+
+    overall = sum(results.values()) / len(results) if results else 0.5
+    return {
+        "win_rates_by_target": results,
+        "overall_win_rate": overall,
+        "summaries": all_summaries,
+    }
+
+
+def telemetry_aggregate(summaries: list[dict[str, Any]]) -> dict[str, float]:
+    """Simple aggregate of key telemetry fields (averages).
+
+    Fields: total_turns, p0/p1_mana_wasted, p0/p1_unblocked_damage.
+    """
+    if not summaries:
+        return {}
+    n = len(summaries)
+    fields = ["total_turns", "p0_mana_wasted", "p1_mana_wasted",
+              "p0_unblocked_damage", "p1_unblocked_damage"]
+    agg: dict[str, float] = {}
+    for f in fields:
+        total = sum(s.get(f, 0) for s in summaries)
+        agg[f"avg_{f}"] = round(total / n, 4)
+    return agg
+
+
 def evaluate_population(
     population: list[DeckDef],
     elite_pool: list[DeckDef],

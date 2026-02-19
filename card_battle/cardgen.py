@@ -8,7 +8,7 @@ import random
 from pathlib import Path
 from typing import Any
 
-from card_battle.evaluation import evaluate_deck_vs_pool
+from card_battle.evaluation import evaluate_deck_vs_pool, evaluate_targets, telemetry_aggregate
 from card_battle.loader import load_cards, load_deck
 from card_battle.models import Card, DeckDef, DeckEntry
 from card_battle.mutation import DECK_SIZE, MAX_COPIES, deck_to_counts, counts_to_deck
@@ -279,47 +279,15 @@ def _evaluate_targets(
     collect_telemetry: bool = True,
 ) -> dict[str, Any]:
     """Evaluate all target decks against each other. Returns summary."""
-    results: dict[str, Any] = {}
-    all_summaries: list[dict[str, Any]] = []
-
-    for deck in targets:
-        opponents = [d for d in targets if d.deck_id != deck.deck_id]
-        if not opponents:
-            results[deck.deck_id] = 0.5
-            continue
-        out = evaluate_deck_vs_pool(
-            deck, opponents, card_db, seed, 0, matches_per_eval,
-            collect_telemetry=collect_telemetry,
-            policy_mix=policy_mix,
-        )
-        if collect_telemetry:
-            wr, sums = out  # type: ignore[misc]
-            all_summaries.extend(sums)
-        else:
-            wr = out  # type: ignore[assignment]
-            sums = []
-        results[deck.deck_id] = wr
-
-    overall = sum(results.values()) / len(results) if results else 0.5
-    return {
-        "win_rates_by_target": results,
-        "overall_win_rate": overall,
-        "summaries": all_summaries,
-    }
+    return evaluate_targets(
+        targets, card_db, seed, matches_per_eval, policy_mix,
+        collect_telemetry=collect_telemetry,
+    )
 
 
 def _telemetry_aggregate(summaries: list[dict[str, Any]]) -> dict[str, float]:
     """Simple aggregate of key telemetry fields."""
-    if not summaries:
-        return {}
-    n = len(summaries)
-    fields = ["total_turns", "p0_mana_wasted", "p1_mana_wasted",
-              "p0_unblocked_damage", "p1_unblocked_damage"]
-    agg: dict[str, float] = {}
-    for f in fields:
-        total = sum(s.get(f, 0) for s in summaries)
-        agg[f"avg_{f}"] = round(total / n, 4)
-    return agg
+    return telemetry_aggregate(summaries)
 
 
 def adoption_test_one(

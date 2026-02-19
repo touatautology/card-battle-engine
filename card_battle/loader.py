@@ -26,12 +26,12 @@ def load_cards(path: str | Path) -> dict[str, Card]:
             params=entry.get("params", {}),
             rarity=entry.get("rarity", "common"),
         )
-        _validate_card(card)
+        validate_card(card)
         card_db[card.id] = card
     return card_db
 
 
-def _validate_card(card: Card) -> None:
+def validate_card(card: Card) -> None:
     if card.cost < 0 or card.cost > 10:
         raise ValueError(f"Card {card.id}: cost {card.cost} out of range [0,10]")
     if card.card_type not in ("unit", "spell"):

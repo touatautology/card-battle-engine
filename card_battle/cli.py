@@ -82,6 +82,28 @@ def main(argv: list[str] | None = None) -> None:
     p_cg.add_argument("--config", required=True, help="Path to generation config JSON")
     p_cg.add_argument("--output", default="output/cardgen", help="Output directory")
 
+    # --- promote ---
+    p_promo = sub.add_parser("promote", help="Promote selected cards into the card pool")
+    p_promo.add_argument("--selected", required=True,
+                         help="Path to selected_cards.json")
+    p_promo.add_argument("--pool", default=str(DEFAULT_CARDS),
+                         help="Path to card pool JSON")
+    p_promo.add_argument("--targets", nargs="+", required=True,
+                         help="Paths to target deck JSON files")
+    p_promo.add_argument("--config", required=True,
+                         help="Path to promotion config JSON")
+    p_promo.add_argument("--output", default="output/promotion",
+                         help="Output directory")
+    p_promo.add_argument("--max", type=int, default=None,
+                         help="Override max promotions per run")
+    p_promo.add_argument("--seed", type=int, default=None,
+                         help="Override seed")
+    conflict_group = p_promo.add_mutually_exclusive_group()
+    conflict_group.add_argument("--fail-on-conflict", action="store_true",
+                                help="Fail on ID conflict")
+    conflict_group.add_argument("--skip-on-conflict", action="store_true",
+                                help="Skip conflicting IDs")
+
     args = parser.parse_args(argv)
 
     if args.command is None:
@@ -100,6 +122,8 @@ def main(argv: list[str] | None = None) -> None:
         _cmd_patterns(args)
     elif args.command == "cardgen":
         _cmd_cardgen(args)
+    elif args.command == "promote":
+        _cmd_promote(args)
 
 
 def _cmd_play(args: argparse.Namespace) -> None:
@@ -259,3 +283,33 @@ def _cmd_cardgen(args: argparse.Namespace) -> None:
     print(f"\nCardgen complete: {result['total_candidates']} candidates, "
           f"{result['total_selected']} selected")
     print(f"Artifacts in: {args.output}")
+
+
+def _cmd_promote(args: argparse.Namespace) -> None:
+    from card_battle.promotion import run_promotion, IDConflictError
+
+    on_conflict = None
+    if args.fail_on_conflict:
+        on_conflict = "fail"
+    elif args.skip_on_conflict:
+        on_conflict = "skip"
+
+    try:
+        result = run_promotion(
+            selected_path=args.selected,
+            pool_path=args.pool,
+            target_paths=args.targets,
+            config_path=args.config,
+            output_dir=args.output,
+            max_override=args.max,
+            seed_override=args.seed,
+            on_conflict_override=on_conflict,
+        )
+    except IDConflictError as e:
+        print(f"ERROR: {e}")
+        sys.exit(2)
+
+    print(f"Report: {result['report_path']}")
+    if not result["gate_passed"]:
+        print(f"Gate FAILED: {result['exit_reason']}")
+        sys.exit(3)
