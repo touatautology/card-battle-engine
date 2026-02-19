@@ -1,0 +1,15 @@
+{
+  "deck_id": "aggro_rush",
+  "entries": [
+    {"card_id": "goblin",    "count": 3},
+    {"card_id": "wolf",      "count": 3},
+    {"card_id": "raider",    "count": 3},
+    {"card_id": "berserker", "count": 3},
+    {"card_id": "soldier",   "count": 3},
+    {"card_id": "fire_imp",  "count": 3},
+    {"card_id": "bolt",      "count": 3},
+    {"card_id": "zap",       "count": 3},
+    {"card_id": "bear",      "count": 3},
+    {"card_id": "knight",    "count": 3}
+  ]
+}

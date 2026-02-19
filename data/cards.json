@@ -1,0 +1,22 @@
+[
+  {"id": "goblin",        "name": "Goblin",            "cost": 1, "card_type": "unit",  "tags": ["creature"],     "template": "Vanilla",             "params": {"atk": 2, "hp": 1}, "rarity": "common"},
+  {"id": "soldier",       "name": "Soldier",           "cost": 2, "card_type": "unit",  "tags": ["creature"],     "template": "Vanilla",             "params": {"atk": 2, "hp": 2}, "rarity": "common"},
+  {"id": "wolf",          "name": "Wolf",              "cost": 2, "card_type": "unit",  "tags": ["beast"],        "template": "Vanilla",             "params": {"atk": 3, "hp": 1}, "rarity": "common"},
+  {"id": "knight",        "name": "Knight",            "cost": 3, "card_type": "unit",  "tags": ["creature"],     "template": "Vanilla",             "params": {"atk": 3, "hp": 3}, "rarity": "common"},
+  {"id": "ogre",          "name": "Ogre",              "cost": 4, "card_type": "unit",  "tags": ["creature"],     "template": "Vanilla",             "params": {"atk": 4, "hp": 4}, "rarity": "common"},
+  {"id": "bear",          "name": "Bear",              "cost": 3, "card_type": "unit",  "tags": ["beast"],        "template": "Vanilla",             "params": {"atk": 4, "hp": 2}, "rarity": "common"},
+  {"id": "dragon",        "name": "Dragon",            "cost": 7, "card_type": "unit",  "tags": ["creature"],     "template": "Vanilla",             "params": {"atk": 7, "hp": 7}, "rarity": "rare"},
+  {"id": "giant",         "name": "Giant",             "cost": 6, "card_type": "unit",  "tags": ["creature"],     "template": "Vanilla",             "params": {"atk": 6, "hp": 6}, "rarity": "uncommon"},
+  {"id": "scout",         "name": "Scout",             "cost": 1, "card_type": "unit",  "tags": ["creature"],     "template": "Vanilla",             "params": {"atk": 1, "hp": 2}, "rarity": "common"},
+  {"id": "berserker",     "name": "Berserker",         "cost": 3, "card_type": "unit",  "tags": ["creature"],     "template": "Vanilla",             "params": {"atk": 5, "hp": 1}, "rarity": "uncommon"},
+  {"id": "fire_imp",      "name": "Fire Imp",          "cost": 3, "card_type": "unit",  "tags": ["creature"],     "template": "OnPlayDamagePlayer",  "params": {"atk": 2, "hp": 2, "amount": 2}, "rarity": "uncommon"},
+  {"id": "sage",          "name": "Sage",              "cost": 4, "card_type": "unit",  "tags": ["creature"],     "template": "OnPlayDraw",          "params": {"atk": 2, "hp": 3, "n": 1}, "rarity": "uncommon"},
+  {"id": "scholar",       "name": "Scholar",           "cost": 5, "card_type": "unit",  "tags": ["creature"],     "template": "OnPlayDraw",          "params": {"atk": 3, "hp": 4, "n": 2}, "rarity": "rare"},
+  {"id": "raider",        "name": "Raider",            "cost": 2, "card_type": "unit",  "tags": ["creature"],     "template": "OnPlayDamagePlayer",  "params": {"atk": 1, "hp": 1, "amount": 1}, "rarity": "common"},
+  {"id": "bolt",          "name": "Lightning Bolt",    "cost": 1, "card_type": "spell", "tags": ["damage"],       "template": "DamagePlayer",        "params": {"amount": 3}, "rarity": "common"},
+  {"id": "fireball",      "name": "Fireball",          "cost": 4, "card_type": "spell", "tags": ["damage"],       "template": "DamagePlayer",        "params": {"amount": 6}, "rarity": "uncommon"},
+  {"id": "heal",          "name": "Healing Light",     "cost": 2, "card_type": "spell", "tags": ["heal"],         "template": "HealSelf",            "params": {"amount": 5}, "rarity": "common"},
+  {"id": "arcane_intel",  "name": "Arcane Intellect",  "cost": 3, "card_type": "spell", "tags": ["draw"],         "template": "Draw",                "params": {"n": 2}, "rarity": "common"},
+  {"id": "smite",         "name": "Smite",             "cost": 3, "card_type": "spell", "tags": ["removal"],      "template": "RemoveUnit",          "params": {"max_hp": 4}, "rarity": "uncommon"},
+  {"id": "zap",           "name": "Zap",               "cost": 1, "card_type": "spell", "tags": ["damage"],       "template": "DamagePlayer",        "params": {"amount": 1}, "rarity": "common"}
+]

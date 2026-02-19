@@ -1,0 +1,16 @@
+{
+  "deck_id": "midrange",
+  "entries": [
+    {"card_id": "soldier",      "count": 3},
+    {"card_id": "knight",       "count": 3},
+    {"card_id": "ogre",         "count": 3},
+    {"card_id": "bear",         "count": 3},
+    {"card_id": "fire_imp",     "count": 3},
+    {"card_id": "sage",         "count": 3},
+    {"card_id": "bolt",         "count": 3},
+    {"card_id": "heal",         "count": 2},
+    {"card_id": "smite",        "count": 2},
+    {"card_id": "arcane_intel", "count": 2},
+    {"card_id": "scout",        "count": 3}
+  ]
+}

@@ -1,0 +1,15 @@
+{
+  "deck_id": "control_mage",
+  "entries": [
+    {"card_id": "scout",        "count": 3},
+    {"card_id": "heal",         "count": 3},
+    {"card_id": "arcane_intel", "count": 3},
+    {"card_id": "smite",        "count": 3},
+    {"card_id": "sage",         "count": 3},
+    {"card_id": "fireball",     "count": 3},
+    {"card_id": "scholar",      "count": 3},
+    {"card_id": "giant",        "count": 3},
+    {"card_id": "dragon",       "count": 3},
+    {"card_id": "soldier",      "count": 3}
+  ]
+}
