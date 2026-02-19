@@ -62,6 +62,15 @@ def main(argv: list[str] | None = None) -> None:
     p_evolve.add_argument("--opponent-policies", default=None,
                           help="name:weight,... (e.g. greedy:0.7,simple:0.3)")
 
+    # --- patterns ---
+    p_pat = sub.add_parser("patterns", help="Extract tactical patterns from evolve artifacts")
+    p_pat.add_argument("--input", required=True,
+                       help="Path to evolve artifact dir or JSONL file")
+    p_pat.add_argument("--config", required=True,
+                       help="Path to pattern extraction config JSON")
+    p_pat.add_argument("--output", default="patterns.json",
+                       help="Output path for patterns.json")
+
     args = parser.parse_args(argv)
 
     if args.command is None:
@@ -76,6 +85,8 @@ def main(argv: list[str] | None = None) -> None:
         _cmd_stats(args)
     elif args.command == "evolve":
         _cmd_evolve(args)
+    elif args.command == "patterns":
+        _cmd_patterns(args)
 
 
 def _cmd_play(args: argparse.Namespace) -> None:
@@ -193,3 +204,29 @@ def _cmd_evolve(args: argparse.Namespace) -> None:
 
     runner = EvolutionRunner(config)
     runner.run()
+
+
+def _cmd_patterns(args: argparse.Namespace) -> None:
+    from card_battle.patterns import extract_all_patterns
+
+    with open(args.config, encoding="utf-8") as f:
+        config = json.load(f)
+
+    input_path = Path(args.input)
+
+    patterns = extract_all_patterns(
+        artifact_dir=input_path,
+        config=config,
+        output_path=args.output,
+    )
+
+    # Count by type
+    type_counts: dict[str, int] = {}
+    for p in patterns:
+        t = p["type"]
+        type_counts[t] = type_counts.get(t, 0) + 1
+
+    print(f"Extracted {len(patterns)} patterns:")
+    for t, c in sorted(type_counts.items()):
+        print(f"  {t}: {c}")
+    print(f"Written to: {args.output}")

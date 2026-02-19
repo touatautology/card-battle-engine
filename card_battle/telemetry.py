@@ -13,6 +13,8 @@ if TYPE_CHECKING:
 class TelemetryConfig:
     enabled: bool = True
     save_match_summaries: bool = False
+    save_turn_trace: bool = False
+    turn_trace_max_cards_per_turn: int = 3
     output_path: str | None = None
 
 
@@ -22,7 +24,11 @@ class MatchTelemetry:
     All counters are per-player lists [p0, p1].
     """
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        save_turn_trace: bool = False,
+        turn_trace_max_cards: int = 3,
+    ) -> None:
         # Per-player counters
         self.damage_to_player: list[int] = [0, 0]
         self.cards_played: list[int] = [0, 0]
@@ -55,6 +61,15 @@ class MatchTelemetry:
         self._winner: str = ""
         self._reason: str = ""
 
+        # Turn trace (v0.4)
+        self._save_turn_trace = save_turn_trace
+        self._turn_trace_max_cards = turn_trace_max_cards
+        self._turn_trace: list[dict[str, Any]] = []
+        self._current_turn_cards: list[str] = []
+        self._current_turn_atk: int = 0
+        self._current_turn_blk: int = 0
+        self._current_turn_player: int = -1
+
     # ------------------------------------------------------------------
     # Hook methods – called by engine.py
     # ------------------------------------------------------------------
@@ -68,6 +83,13 @@ class MatchTelemetry:
         self._turn_mana_spent[player_idx] = 0
         self._turn_mana_max[player_idx] = p.mana_max
 
+        # Turn trace: reset per-turn accumulators
+        if self._save_turn_trace:
+            self._current_turn_cards = []
+            self._current_turn_atk = 0
+            self._current_turn_blk = 0
+            self._current_turn_player = player_idx
+
     def on_card_played(
         self, gs: "GameState", player_idx: int, card: "Card",
     ) -> None:
@@ -76,6 +98,16 @@ class MatchTelemetry:
         self._turn_mana_spent[player_idx] += card.cost
         if card.is_unit:
             self.units_summoned[player_idx] += 1
+
+        # Turn trace: record card ID
+        if self._save_turn_trace:
+            if len(self._current_turn_cards) < self._turn_trace_max_cards:
+                self._current_turn_cards.append(card.id)
+            elif (
+                len(self._current_turn_cards) == self._turn_trace_max_cards
+                and self._current_turn_cards[-1] != "__MORE__"
+            ):
+                self._current_turn_cards.append("__MORE__")
 
     def on_cards_drawn(
         self, gs: "GameState", player_idx: int, n: int, reason: str,
@@ -93,12 +125,20 @@ class MatchTelemetry:
             self.attacks_declared[player_idx] += 1
             self.attackers_total[player_idx] += len(attacker_uids)
 
+        # Turn trace: record attack count
+        if self._save_turn_trace:
+            self._current_turn_atk = len(attacker_uids)
+
     def on_declare_block(
         self, gs: "GameState", defender_idx: int, pairs: tuple[tuple[int, int], ...],
     ) -> None:
         if pairs:
             self.blocks_declared[defender_idx] += 1
             self.blocks_total[defender_idx] += len(pairs)
+
+        # Turn trace: record block count (on attacker's turn record)
+        if self._save_turn_trace:
+            self._current_turn_blk = len(pairs)
 
     def on_combat_resolved(
         self,
@@ -125,6 +165,16 @@ class MatchTelemetry:
         wasted = self._turn_mana_max[player_idx] - self._turn_mana_spent[player_idx]
         self.mana_wasted[player_idx] += max(wasted, 0)
 
+        # Turn trace: finalize this turn's record
+        if self._save_turn_trace:
+            self._turn_trace.append({
+                "turn": gs.turn,
+                "player": self._current_turn_player,
+                "played": list(self._current_turn_cards),
+                "atk": self._current_turn_atk,
+                "blk": self._current_turn_blk,
+            })
+
     def on_game_end(
         self, gs: "GameState", result: "GameResult", reason: str,
     ) -> None:
@@ -133,13 +183,6 @@ class MatchTelemetry:
         self._reason = reason
         if reason == "deckout":
             # The player who decked out lost due to fatigue
-            for pi in range(2):
-                if gs.players[pi].hp > 0:
-                    continue
-                # This player didn't necessarily deck out; check deck
-            # Actually: deckout means the active player couldn't draw
-            # The active player at the time of deckout is indicated by
-            # the game result: loser is the one who decked out
             from card_battle.models import GameResult as GR
             if result == GR.PLAYER_1_WIN:
                 self.fatigue_loss[0] = True
@@ -179,4 +222,9 @@ class MatchTelemetry:
                 key = f"p{pi}_{fname}"
                 v = vals[pi]
                 summary[key] = v if not isinstance(v, bool) else int(v)
+
+        # Turn trace (v0.4)
+        if self._save_turn_trace:
+            summary["turn_trace"] = self._turn_trace
+
         return summary

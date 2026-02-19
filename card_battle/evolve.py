@@ -89,6 +89,9 @@ class EvolutionRunner:
         out = Path(cfg.output_dir)
         out.mkdir(parents=True, exist_ok=True)
         telemetry_on = cfg.telemetry.get("enabled", False)
+        save_summaries = cfg.telemetry.get("save_match_summaries", False)
+        save_turn_trace = cfg.telemetry.get("save_turn_trace", False)
+        turn_trace_max_cards = cfg.telemetry.get("turn_trace_max_cards_per_turn", 3)
 
         # Load cards
         self.card_db = load_cards(cfg.cards_path)
@@ -112,6 +115,8 @@ class EvolutionRunner:
                 cfg.global_seed, gen, cfg.matches_per_eval,
                 collect_telemetry=telemetry_on,
                 policy_mix=policy_mix,
+                save_turn_trace=save_turn_trace,
+                turn_trace_max_cards=turn_trace_max_cards,
             )
             if telemetry_on:
                 scored, gen_summaries = eval_out  # type: ignore[misc]
@@ -160,6 +165,12 @@ class EvolutionRunner:
                         group_keys=["deck_id", "candidate_policy", "opponent_policy"],
                     )
                 self._write_json(out / f"gen_{gen:03d}_metrics.json", gen_metrics)
+
+            # 4c. Save match summaries as JSONL
+            if telemetry_on and save_summaries and gen_summaries:
+                self._write_jsonl(
+                    out / f"gen_{gen:03d}_summaries.jsonl", gen_summaries,
+                )
 
             stats = compute_fitness_stats(scored)
             print(
@@ -302,3 +313,10 @@ class EvolutionRunner:
     def _write_json(path: Path, data: Any) -> None:
         with open(path, "w", encoding="utf-8") as f:
             json.dump(data, f, indent=2, ensure_ascii=False)
+
+    @staticmethod
+    def _write_jsonl(path: Path, records: list[dict[str, Any]]) -> None:
+        with open(path, "w", encoding="utf-8") as f:
+            for record in records:
+                f.write(json.dumps(record, ensure_ascii=False))
+                f.write("\n")

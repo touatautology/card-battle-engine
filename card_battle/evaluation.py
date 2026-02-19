@@ -37,6 +37,11 @@ def derive_match_seed(
     return int.from_bytes(digest[:8], "big")
 
 
+def _match_id_from_seed(seed: int, swapped: bool) -> str:
+    """Generate a stable match_id string."""
+    return f"m_{seed}_{int(swapped)}"
+
+
 def _score_game(log: Any, swapped: bool) -> float:
     """Extract score (1.0/0.5/0.0) for the candidate deck from a game log."""
     if swapped:
@@ -52,6 +57,19 @@ def _score_game(log: Any, swapped: bool) -> float:
     return 0.0
 
 
+def _make_telemetry(
+    collect: bool,
+    save_turn_trace: bool = False,
+    turn_trace_max_cards: int = 3,
+) -> MatchTelemetry | None:
+    if not collect:
+        return None
+    return MatchTelemetry(
+        save_turn_trace=save_turn_trace,
+        turn_trace_max_cards=turn_trace_max_cards,
+    )
+
+
 def evaluate_deck_vs_pool(
     deck: DeckDef,
     elite_pool: list[DeckDef],
@@ -61,6 +79,8 @@ def evaluate_deck_vs_pool(
     matches_per_opponent: int,
     collect_telemetry: bool = False,
     policy_mix: PolicyMix | None = None,
+    save_turn_trace: bool = False,
+    turn_trace_max_cards: int = 3,
 ) -> float | tuple[float, list[dict[str, Any]]]:
     """Evaluate a deck against the elite pool. Returns average win rate [0, 1].
 
@@ -80,6 +100,7 @@ def evaluate_deck_vs_pool(
         return _evaluate_multi_policy(
             deck, elite_pool, card_db, global_seed, generation,
             matches_per_opponent, collect_telemetry, policy_mix,
+            save_turn_trace, turn_trace_max_cards,
         )
 
     # v3.1 compatible path: GreedyAI vs GreedyAI
@@ -96,7 +117,7 @@ def evaluate_deck_vs_pool(
                     deck.deck_id, opponent.deck_id,
                     game_idx, swapped,
                 )
-                tm = MatchTelemetry() if collect_telemetry else None
+                tm = _make_telemetry(collect_telemetry, save_turn_trace, turn_trace_max_cards)
                 if swapped:
                     gs = init_game(card_db, opponent, deck, seed)
                 else:
@@ -106,9 +127,16 @@ def evaluate_deck_vs_pool(
 
                 if tm is not None:
                     s = tm.to_summary()
+                    s["match_id"] = _match_id_from_seed(seed, swapped)
                     s["deck_id"] = deck.deck_id
                     s["opponent_id"] = opponent.deck_id
                     s["swapped"] = swapped
+                    if swapped:
+                        s["deck_id_p0"] = opponent.deck_id
+                        s["deck_id_p1"] = deck.deck_id
+                    else:
+                        s["deck_id_p0"] = deck.deck_id
+                        s["deck_id_p1"] = opponent.deck_id
                     summaries.append(s)
 
                 total_games += 1
@@ -128,6 +156,8 @@ def _evaluate_multi_policy(
     matches_per_opponent: int,
     collect_telemetry: bool,
     policy_mix: PolicyMix,
+    save_turn_trace: bool = False,
+    turn_trace_max_cards: int = 3,
 ) -> float | tuple[float, list[dict[str, Any]]]:
     """Evaluate with multiple candidate/opponent policy pairs."""
     from card_battle.policies import default_registry, normalize_weights
@@ -164,7 +194,7 @@ def _evaluate_multi_policy(
                         cand_agent = pc.make_agent(seed)
                         opp_agent = po.make_agent(seed + 1)
 
-                        tm = MatchTelemetry() if collect_telemetry else None
+                        tm = _make_telemetry(collect_telemetry, save_turn_trace, turn_trace_max_cards)
                         if swapped:
                             agents = (opp_agent, cand_agent)
                             gs = init_game(card_db, opponent, deck, seed)
@@ -176,11 +206,18 @@ def _evaluate_multi_policy(
 
                         if tm is not None:
                             s = tm.to_summary()
+                            s["match_id"] = _match_id_from_seed(seed, swapped)
                             s["deck_id"] = deck.deck_id
                             s["opponent_id"] = opponent.deck_id
                             s["swapped"] = swapped
                             s["candidate_policy"] = pc_name
                             s["opponent_policy"] = po_name
+                            if swapped:
+                                s["deck_id_p0"] = opponent.deck_id
+                                s["deck_id_p1"] = deck.deck_id
+                            else:
+                                s["deck_id_p0"] = deck.deck_id
+                                s["deck_id_p1"] = opponent.deck_id
                             summaries.append(s)
 
                         pair_games += 1
@@ -204,6 +241,8 @@ def evaluate_population(
     matches_per_opponent: int,
     collect_telemetry: bool = False,
     policy_mix: PolicyMix | None = None,
+    save_turn_trace: bool = False,
+    turn_trace_max_cards: int = 3,
 ) -> list[tuple[DeckDef, float]] | tuple[list[tuple[DeckDef, float]], list[dict[str, Any]]]:
     """Evaluate all decks in a population against the elite pool.
 
@@ -218,6 +257,8 @@ def evaluate_population(
             global_seed, generation, matches_per_opponent,
             collect_telemetry=collect_telemetry,
             policy_mix=policy_mix,
+            save_turn_trace=save_turn_trace,
+            turn_trace_max_cards=turn_trace_max_cards,
         )
         if collect_telemetry:
             fitness, sums = out  # type: ignore[misc]

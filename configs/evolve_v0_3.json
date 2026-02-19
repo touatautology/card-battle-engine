@@ -27,7 +27,7 @@
   ],
   "log_every_n": 1,
   "top_n_summary": 5,
-  "telemetry": {"enabled": true, "save_match_summaries": false},
+  "telemetry": {"enabled": true, "save_match_summaries": true, "save_turn_trace": true},
   "metrics": {"top_n_decks": 5},
   "evaluation": {
     "policies": {
