@@ -139,6 +139,13 @@ def main(argv: list[str] | None = None) -> None:
     p_cycle.add_argument("--replay", choices=["on", "off"], default=None,
                          help="Override replay capture")
 
+    # --- viz ---
+    p_viz = sub.add_parser("viz", help="Generate visualization from cycle run artifacts")
+    p_viz.add_argument("--input", required=True, help="Path to cycle run output dir")
+    p_viz.add_argument("--output", default=None, help="Output dir (default: <input>/viz)")
+    p_viz.add_argument("--serve", action="store_true", help="Start local HTTP server")
+    p_viz.add_argument("--port", type=int, default=8000, help="HTTP server port")
+
     args = parser.parse_args(argv)
 
     if args.command is None:
@@ -163,6 +170,8 @@ def main(argv: list[str] | None = None) -> None:
         _cmd_replay(args)
     elif args.command == "cycle":
         _cmd_cycle(args)
+    elif args.command == "viz":
+        _cmd_viz(args)
 
 
 def _cmd_play(args: argparse.Namespace) -> None:
@@ -401,3 +410,27 @@ def _cmd_cycle(args: argparse.Namespace) -> None:
         seed_override=args.seed,
         replay_override=replay_override,
     )
+
+
+def _cmd_viz(args: argparse.Namespace) -> None:
+    from card_battle.viz import export_static_site
+
+    input_dir = Path(args.input)
+    out_dir = Path(args.output) if args.output else input_dir / "viz"
+
+    result = export_static_site(input_dir, out_dir)
+    print(f"Visualization generated in: {result}")
+
+    if args.serve:
+        import http.server
+        import functools
+        import os
+
+        os.chdir(str(result))
+        handler = functools.partial(http.server.SimpleHTTPRequestHandler, directory=str(result))
+        with http.server.HTTPServer(("", args.port), handler) as httpd:
+            print(f"Serving at http://localhost:{args.port}/ — press Ctrl+C to stop")
+            try:
+                httpd.serve_forever()
+            except KeyboardInterrupt:
+                print("\nServer stopped.")
