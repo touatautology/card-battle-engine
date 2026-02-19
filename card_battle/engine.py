@@ -17,6 +17,7 @@ from card_battle.models import (
 
 if TYPE_CHECKING:
     from card_battle.ai import Agent
+    from card_battle.replay import ReplayWriter
     from card_battle.telemetry import MatchTelemetry
 
 MAX_TURNS = 50
@@ -109,6 +110,7 @@ def _start_turn(gs: GameState) -> GameResult | None:
 def _resolve_combat(
     gs: GameState,
     telemetry: "MatchTelemetry | None" = None,
+    replay: "ReplayWriter | None" = None,
 ) -> None:
     """Resolve combat: simultaneous damage, then remove dead units."""
     assert gs.combat is not None
@@ -169,13 +171,13 @@ def _resolve_combat(
         if unit is not None:
             unit.hp -= dmg
 
-    # Count deaths before removing (for telemetry)
+    # Count deaths before removing (for telemetry/replay)
     atk_deaths = 0
     def_deaths = 0
     # Remove dead units from both boards
     for player in [active_player, defender_player]:
         dead = [u for u in player.board if u.hp <= 0]
-        if telemetry:
+        if telemetry or replay:
             if player is active_player:
                 atk_deaths = len(dead)
             else:
@@ -204,6 +206,24 @@ def _resolve_combat(
             player_damage=player_damage,
         )
 
+    # Replay: combat_resolve (2h)
+    if replay:
+        from card_battle.replay import snapshot_player
+        replay.write({
+            "type": "combat_resolve",
+            "turn": gs.turn,
+            "attacker_player": gs.active_player,
+            "defender_player": gs.opponent_idx(),
+            "unblocked_damage": unblocked_dmg,
+            "unblocked_attackers": unblocked_atk_count,
+            "trades": trade_count,
+            "player_damage": player_damage,
+            "atk_deaths": atk_deaths,
+            "def_deaths": def_deaths,
+            "hp_after_p0": gs.players[0].hp,
+            "hp_after_p1": gs.players[1].hp,
+        })
+
     # Clear combat state
     gs.combat = None
 
@@ -227,11 +247,22 @@ def run_game(
     agents: tuple["Agent", "Agent"],
     trace: bool = False,
     telemetry: "MatchTelemetry | None" = None,
+    replay: "ReplayWriter | None" = None,
 ) -> MatchLog:
     play_trace: list[dict] | None = [] if trace else None
 
     if telemetry:
         telemetry.on_game_start(gs)
+
+    # Replay: game_start (2a)
+    if replay:
+        from card_battle.replay import snapshot_player
+        replay.write({
+            "type": "game_start",
+            "active_player": gs.active_player,
+            "p0": snapshot_player(gs.players[0]),
+            "p1": snapshot_player(gs.players[1]),
+        })
 
     while gs.result is None:
         # Turn limit
@@ -249,6 +280,16 @@ def run_game(
         result = _start_turn(gs)
         if telemetry:
             telemetry.on_turn_start(gs, gs.active_player)
+        # Replay: turn_start (2b)
+        if replay:
+            from card_battle.replay import snapshot_player
+            replay.write({
+                "type": "turn_start",
+                "turn": gs.turn,
+                "active_player": gs.active_player,
+                "p0": snapshot_player(gs.players[0]),
+                "p1": snapshot_player(gs.players[1]),
+            })
         if result is not None:
             # Deckout — no card drawn
             gs.result = result
@@ -268,19 +309,34 @@ def run_game(
                 gs.phase = "end"
                 break
 
-            # Telemetry: snapshot before applying PlayCard
-            if telemetry and isinstance(action, PlayCard):
+            # Snapshot before applying PlayCard (for telemetry/replay)
+            _card_snapshot = None
+            if (telemetry or replay) and isinstance(action, PlayCard):
                 p = gs.active()
-                opp = gs.opponent()
-                hand_size_before = len(p.hand)
-                opp_hp_before = opp.hp
-                card = gs.card_db[p.hand[action.hand_index]]
+                _card_snapshot = gs.card_db[p.hand[action.hand_index]]
+                if telemetry:
+                    opp = gs.opponent()
+                    hand_size_before = len(p.hand)
+                    opp_hp_before = opp.hp
 
             apply_action(gs, action)
 
+            # Replay: play_card (2c)
+            if replay and _card_snapshot is not None:
+                replay.write({
+                    "type": "play_card",
+                    "turn": gs.turn,
+                    "player": gs.active_player,
+                    "card_id": _card_snapshot.id,
+                    "cost": _card_snapshot.cost,
+                    "card_type": _card_snapshot.card_type,
+                    "mana_after": gs.active().mana,
+                    "hand_count_after": len(gs.active().hand),
+                })
+
             # Telemetry: record PlayCard effects
             if telemetry and isinstance(action, PlayCard):
-                telemetry.on_card_played(gs, gs.active_player, card)
+                telemetry.on_card_played(gs, gs.active_player, _card_snapshot)
                 # Detect effect draws: cards drawn = hand_now - hand_before + 1
                 # (+1 because the played card was removed from hand)
                 p = gs.active()
@@ -292,6 +348,14 @@ def run_game(
                 damage = opp_hp_before - opp.hp
                 if damage > 0:
                     telemetry.on_spell_damage(gs, gs.active_player, damage)
+
+            # Replay: go_to_combat (2d)
+            if replay and isinstance(action, GoToCombat):
+                replay.write({
+                    "type": "go_to_combat",
+                    "turn": gs.turn,
+                    "player": gs.active_player,
+                })
 
             if gs.phase != "main":
                 break  # GoToCombat transitioned to combat_attack
@@ -309,6 +373,21 @@ def run_game(
             apply_action(gs, action)
             # DeclareAttack(empty) → phase="main" (combat cancelled)
 
+            # Replay: declare_attack (2e)
+            if replay and isinstance(action, DeclareAttack):
+                active_units = {u.uid: u for u in gs.active().board}
+                replay.write({
+                    "type": "declare_attack",
+                    "turn": gs.turn,
+                    "player": gs.active_player,
+                    "attacker_uids": list(action.attacker_uids),
+                    "attackers": [
+                        {"uid": uid, "card_id": active_units[uid].card_id,
+                         "atk": active_units[uid].atk, "hp": active_units[uid].hp}
+                        for uid in action.attacker_uids if uid in active_units
+                    ],
+                })
+
             # Telemetry: record attack declaration
             if telemetry and isinstance(action, DeclareAttack):
                 telemetry.on_declare_attack(
@@ -323,11 +402,30 @@ def run_game(
             _record_trace(play_trace, gs, action, defender_idx)
             apply_action(gs, action)
 
+            # Replay: declare_block (2f)
+            if replay and isinstance(action, DeclareBlock):
+                def_units = {u.uid: u for u in gs.players[defender_idx].board}
+                atk_units = {u.uid: u for u in gs.active().board}
+                replay.write({
+                    "type": "declare_block",
+                    "turn": gs.turn,
+                    "player": defender_idx,
+                    "pairs": [
+                        {
+                            "blocker_uid": b,
+                            "blocker_card_id": def_units[b].card_id if b in def_units else "?",
+                            "attacker_uid": a,
+                            "attacker_card_id": atk_units[a].card_id if a in atk_units else "?",
+                        }
+                        for b, a in action.pairs
+                    ],
+                })
+
             # Telemetry: record block declaration
             if telemetry and isinstance(action, DeclareBlock):
                 telemetry.on_declare_block(gs, defender_idx, action.pairs)
 
-            _resolve_combat(gs, telemetry=telemetry)
+            _resolve_combat(gs, telemetry=telemetry, replay=replay)
 
             result = _check_winner(gs)
             if result is not None:
@@ -340,11 +438,19 @@ def run_game(
             # Telemetry: record turn end
             if telemetry:
                 telemetry.on_turn_end(gs, gs.active_player)
+            # Replay: turn_end (2i)
+            if replay:
+                replay.write({
+                    "type": "turn_end",
+                    "turn": gs.turn,
+                    "active_player": gs.active_player,
+                })
             # main can happen if combat was cancelled
             gs.active_player = 1 - gs.active_player
 
-    # Telemetry: record game end
-    if telemetry and gs.result is not None:
+    # Compute reason for telemetry/replay
+    reason = None
+    if (telemetry or replay) and gs.result is not None:
         reason = "turn_limit" if gs.turn >= MAX_TURNS else "normal"
         # Detect deckout: loser is alive but has empty deck
         if reason == "normal" and gs.result != GameResult.DRAW:
@@ -352,7 +458,19 @@ def run_game(
             loser = gs.players[loser_idx]
             if loser.hp > 0 and not loser.deck:
                 reason = "deckout"
+
+    if telemetry and gs.result is not None:
         telemetry.on_game_end(gs, gs.result, reason)
+
+    # Replay: game_end (2j)
+    if replay and gs.result is not None:
+        replay.write({
+            "type": "game_end",
+            "winner": gs.result.value,
+            "reason": reason,
+            "turns": gs.turn,
+            "final_hp": [gs.players[0].hp, gs.players[1].hp],
+        })
 
     return MatchLog(
         seed=0,  # filled by caller

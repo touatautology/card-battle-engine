@@ -32,6 +32,10 @@ def main(argv: list[str] | None = None) -> None:
                         help="ava=AI vs AI, hva=Human vs AI, hvh=Human vs Human")
     p_play.add_argument("--cards", default=str(DEFAULT_CARDS), help="Path to cards.json")
     p_play.add_argument("--trace", action="store_true", help="Print play trace")
+    p_play.add_argument("--replay", choices=["on", "off"], default="off",
+                        help="Enable replay JSONL output")
+    p_play.add_argument("--replay-dir", default="output/replays",
+                        help="Directory for replay files")
 
     # --- simulate ---
     p_sim = sub.add_parser("simulate", help="Run batch simulation")
@@ -44,6 +48,12 @@ def main(argv: list[str] | None = None) -> None:
     p_sim.add_argument("--cards", default=str(DEFAULT_CARDS), help="Path to cards.json")
     p_sim.add_argument("--telemetry", choices=["on", "off"], default="off",
                         help="Enable match telemetry collection")
+    p_sim.add_argument("--replay", choices=["on", "off"], default="off",
+                        help="Enable replay JSONL output")
+    p_sim.add_argument("--replay-dir", default="output/replays",
+                        help="Directory for replay files")
+    p_sim.add_argument("--replay-sample-rate", type=float, default=1.0,
+                        help="Fraction of matches to record replays for")
 
     # --- stats ---
     p_stats = sub.add_parser("stats", help="Show stats from match logs")
@@ -104,6 +114,16 @@ def main(argv: list[str] | None = None) -> None:
     conflict_group.add_argument("--skip-on-conflict", action="store_true",
                                 help="Skip conflicting IDs")
 
+    # --- replay ---
+    p_replay = sub.add_parser("replay", help="View a JSONL replay file")
+    p_replay.add_argument("file", help="Path to replay .jsonl")
+    p_replay.add_argument("--compact", action="store_true",
+                          help="Compact output (hide board details)")
+    p_replay.add_argument("--from-turn", type=int, default=None,
+                          help="Start displaying from this turn")
+    p_replay.add_argument("--to-turn", type=int, default=None,
+                          help="Stop displaying after this turn")
+
     args = parser.parse_args(argv)
 
     if args.command is None:
@@ -124,6 +144,8 @@ def main(argv: list[str] | None = None) -> None:
         _cmd_cardgen(args)
     elif args.command == "promote":
         _cmd_promote(args)
+    elif args.command == "replay":
+        _cmd_replay(args)
 
 
 def _cmd_play(args: argparse.Namespace) -> None:
@@ -139,7 +161,23 @@ def _cmd_play(args: argparse.Namespace) -> None:
         agents = (HumanAgent(), HumanAgent())
 
     gs = init_game(card_db, deck_a, deck_b, args.seed)
-    log = run_game(gs, agents, trace=args.trace)
+
+    rw = None
+    if getattr(args, "replay", "off") == "on":
+        from card_battle.replay import ReplayWriter
+        replay_dir = Path(args.replay_dir)
+        rw = ReplayWriter(replay_dir / f"{args.seed}.jsonl")
+        rw.write({
+            "type": "meta",
+            "seed": args.seed,
+            "deck_ids": [deck_a.deck_id, deck_b.deck_id],
+        })
+
+    log = run_game(gs, agents, trace=args.trace, replay=rw)
+
+    if rw is not None:
+        rw.close()
+        print(f"Replay written to: {rw.path}")
 
     render_board(gs)
     print(f"Result: {log.winner.value}")
@@ -167,9 +205,13 @@ def _cmd_simulate(args: argparse.Namespace) -> None:
     print(f"Loaded {len(decks)} decks: {[d.deck_id for d in decks]}")
 
     telemetry_on = getattr(args, "telemetry", "off") == "on"
+    replay_on = getattr(args, "replay", "off") == "on"
     logs = run_batch(
         card_db, decks, args.matches, args.seed, args.output, args.trace,
         telemetry_enabled=telemetry_on,
+        replay_enabled=replay_on,
+        replay_dir=Path(args.replay_dir) if replay_on else None,
+        replay_sample_rate=getattr(args, "replay_sample_rate", 1.0),
     )
     stats = aggregate(logs)
     render_stats(stats)
@@ -313,3 +355,13 @@ def _cmd_promote(args: argparse.Namespace) -> None:
     if not result["gate_passed"]:
         print(f"Gate FAILED: {result['exit_reason']}")
         sys.exit(3)
+
+
+def _cmd_replay(args: argparse.Namespace) -> None:
+    from card_battle.replay import render_replay
+    render_replay(
+        args.file,
+        from_turn=args.from_turn,
+        to_turn=args.to_turn,
+        compact=args.compact,
+    )

@@ -21,12 +21,20 @@ def run_batch(
     output_dir: str | Path | None = None,
     trace: bool = False,
     telemetry_enabled: bool = False,
+    replay_enabled: bool = False,
+    replay_dir: Path | None = None,
+    replay_sample_rate: float = 1.0,
 ) -> list[MatchLog]:
     """Run round-robin matches between all deck pairs."""
+    import random as _random
+
     agents = (GreedyAI(), GreedyAI())
     logs: list[MatchLog] = []
     summaries: list[dict[str, Any]] = []
     pairs = list(combinations(range(len(decks)), 2))
+
+    # Separate RNG for replay sampling (does not affect game RNG)
+    sample_rng = _random.Random(base_seed + 999) if replay_enabled else None
 
     match_id = 0
     for i, j in pairs:
@@ -34,7 +42,21 @@ def run_batch(
             seed = base_seed + match_id
             gs = init_game(card_db, decks[i], decks[j], seed)
             tm = MatchTelemetry() if telemetry_enabled else None
-            log = run_game(gs, agents, trace=trace, telemetry=tm)
+
+            # Replay writer for this match
+            rw = None
+            if replay_enabled and sample_rng is not None:
+                if sample_rng.random() < replay_sample_rate:
+                    from card_battle.replay import ReplayWriter
+                    rdir = replay_dir or Path("output/replays")
+                    rw = ReplayWriter(Path(rdir) / f"{seed}.jsonl")
+                    rw.write({
+                        "type": "meta",
+                        "seed": seed,
+                        "deck_ids": [decks[i].deck_id, decks[j].deck_id],
+                    })
+
+            log = run_game(gs, agents, trace=trace, telemetry=tm, replay=rw)
             log.seed = seed  # type: ignore[misc]
             log.deck_ids = (decks[i].deck_id, decks[j].deck_id)  # type: ignore[misc]
             logs.append(log)
@@ -42,6 +64,8 @@ def run_batch(
                 s = tm.to_summary()
                 s["deck_ids"] = [decks[i].deck_id, decks[j].deck_id]
                 summaries.append(s)
+            if rw is not None:
+                rw.close()
             match_id += 1
 
     if output_dir is not None:
