@@ -8,6 +8,61 @@ from typing import Any
 
 from card_battle.viz_templates import APP_JS, INDEX_HTML, REPLAY_HTML, STYLE_CSS
 
+# Telemetry fields we know how to extract.
+# Each entry: (manifest_key, extractor_fn(telem_dict) -> float | None)
+# Returns None when the source field is absent so the UI shows "unknown"
+# instead of a misleading 0.0.
+
+def _get_avg_total_turns(t: dict[str, Any]) -> float | None:
+    v = t.get("avg_total_turns")
+    return float(v) if v is not None else None
+
+
+def _get_avg_mana_wasted(t: dict[str, Any]) -> float | None:
+    p0 = t.get("avg_p0_mana_wasted")
+    p1 = t.get("avg_p1_mana_wasted")
+    if p0 is None and p1 is None:
+        return None
+    return (float(p0 or 0) + float(p1 or 0)) / 2
+
+
+def _get_avg_unblocked_damage(t: dict[str, Any]) -> float | None:
+    p0 = t.get("avg_p0_unblocked_damage")
+    p1 = t.get("avg_p1_unblocked_damage")
+    if p0 is None and p1 is None:
+        return None
+    return (float(p0 or 0) + float(p1 or 0)) / 2
+
+
+_TELEM_METRICS: list[tuple[str, Any]] = [
+    ("avg_turns", _get_avg_total_turns),
+    ("mana_wasted", _get_avg_mana_wasted),
+    ("unblocked_damage", _get_avg_unblocked_damage),
+]
+
+
+def _compute_delta(before: float | None, after: float | None) -> float | None:
+    """Return after - before, or None if either side is unknown."""
+    if before is None or after is None:
+        return None
+    return after - before
+
+
+def extract_telemetry_deltas(
+    before_telem: dict[str, Any],
+    after_telem: dict[str, Any],
+) -> dict[str, float | None]:
+    """Extract telemetry deltas between before/after benchmarks.
+
+    Returns a dict of metric_name -> delta (float or None if data missing).
+    """
+    deltas: dict[str, float | None] = {}
+    for key, extractor in _TELEM_METRICS:
+        b = extractor(before_telem)
+        a = extractor(after_telem)
+        deltas[key] = _compute_delta(b, a)
+    return deltas
+
 
 def convert_replay_jsonl_to_json(jsonl_path: Path, out_path: Path) -> str:
     """Convert a JSONL replay file to a JSON array file.
@@ -91,39 +146,23 @@ def build_manifest(run_dir: Path, replays_out_dir: Path) -> dict[str, Any]:
             # Win rate delta (average across targets)
             delta_dict = promo_report.get("delta", {})
             if delta_dict:
-                wr_delta = sum(delta_dict.values()) / len(delta_dict)
+                wr_delta: float | None = sum(delta_dict.values()) / len(delta_dict)
             else:
-                wr_delta = 0.0
+                wr_delta = None
 
-            # Telemetry deltas
+            # Telemetry deltas (None when source field absent)
             before_telem = promo_report.get("before", {}).get(
                 "telemetry_aggregate", {}
             )
             after_telem = promo_report.get("after", {}).get(
                 "telemetry_aggregate", {}
             )
-
-            avg_turns_delta = after_telem.get(
-                "avg_total_turns", 0
-            ) - before_telem.get("avg_total_turns", 0)
-
-            before_mw = (before_telem.get("avg_p0_mana_wasted", 0)
-                         + before_telem.get("avg_p1_mana_wasted", 0)) / 2
-            after_mw = (after_telem.get("avg_p0_mana_wasted", 0)
-                        + after_telem.get("avg_p1_mana_wasted", 0)) / 2
-            mana_wasted_delta = after_mw - before_mw
-
-            before_ud = (before_telem.get("avg_p0_unblocked_damage", 0)
-                         + before_telem.get("avg_p1_unblocked_damage", 0)) / 2
-            after_ud = (after_telem.get("avg_p0_unblocked_damage", 0)
-                        + after_telem.get("avg_p1_unblocked_damage", 0)) / 2
-            unblocked_dmg_delta = after_ud - before_ud
+            telem_deltas = extract_telemetry_deltas(before_telem, after_telem)
 
             cycle_entry["deltas"] = {
-                "win_rate": round(wr_delta, 4),
-                "avg_turns": round(avg_turns_delta, 4),
-                "mana_wasted": round(mana_wasted_delta, 4),
-                "unblocked_damage": round(unblocked_dmg_delta, 4),
+                "win_rate": round(wr_delta, 4) if wr_delta is not None else None,
+                **{k: round(v, 4) if v is not None else None
+                   for k, v in telem_deltas.items()},
             }
 
             # Gate checks

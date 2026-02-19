@@ -7,7 +7,12 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from card_battle.viz import build_manifest, convert_replay_jsonl_to_json, export_static_site
+from card_battle.viz import (
+    build_manifest,
+    convert_replay_jsonl_to_json,
+    export_static_site,
+    extract_telemetry_deltas,
+)
 
 
 def _make_replay_jsonl(path: Path, seed: int = 42,
@@ -333,6 +338,91 @@ class TestExportNoReplays(unittest.TestCase):
                 manifest = json.load(f)
             self.assertEqual(len(manifest["cycles"]), 0)
             self.assertEqual(len(manifest["replays"]), 0)
+
+
+class TestExtractTelemetryDeltas(unittest.TestCase):
+    """Test the telemetry delta extraction function."""
+
+    def test_all_fields_present(self) -> None:
+        before = {
+            "avg_total_turns": 10.0,
+            "avg_p0_mana_wasted": 1.5, "avg_p1_mana_wasted": 1.8,
+            "avg_p0_unblocked_damage": 3.0, "avg_p1_unblocked_damage": 2.5,
+        }
+        after = {
+            "avg_total_turns": 9.6,
+            "avg_p0_mana_wasted": 1.3, "avg_p1_mana_wasted": 1.6,
+            "avg_p0_unblocked_damage": 1.9, "avg_p1_unblocked_damage": 2.0,
+        }
+        deltas = extract_telemetry_deltas(before, after)
+
+        self.assertAlmostEqual(deltas["avg_turns"], -0.4)
+        self.assertAlmostEqual(deltas["mana_wasted"], -0.2)
+        self.assertIsNotNone(deltas["unblocked_damage"])
+
+    def test_missing_field_returns_none(self) -> None:
+        """When source field is absent, delta should be None, not 0.0."""
+        before = {"avg_total_turns": 10.0}
+        after = {"avg_total_turns": 9.5}
+        deltas = extract_telemetry_deltas(before, after)
+
+        self.assertAlmostEqual(deltas["avg_turns"], -0.5)
+        self.assertIsNone(deltas["mana_wasted"])
+        self.assertIsNone(deltas["unblocked_damage"])
+
+    def test_empty_telemetry_all_none(self) -> None:
+        deltas = extract_telemetry_deltas({}, {})
+        for v in deltas.values():
+            self.assertIsNone(v)
+
+    def test_partial_before_none(self) -> None:
+        """If before has the field but after doesn't, delta is None."""
+        before = {"avg_total_turns": 10.0, "avg_p0_mana_wasted": 1.5, "avg_p1_mana_wasted": 1.0}
+        after = {"avg_total_turns": 9.0}
+        deltas = extract_telemetry_deltas(before, after)
+
+        self.assertAlmostEqual(deltas["avg_turns"], -1.0)
+        self.assertIsNone(deltas["mana_wasted"])
+
+
+class TestManifestNullDeltas(unittest.TestCase):
+    """Verify that missing telemetry in promotion_report produces null in manifest."""
+
+    def test_unknown_telemetry_yields_null(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            run_dir = Path(tmp) / "run"
+            run_dir.mkdir()
+
+            # Minimal cycle with no telemetry fields
+            cycle_dir = run_dir / "cycles" / "cycle_000" / "promote"
+            cycle_dir.mkdir(parents=True)
+            promo_report = {
+                "before": {"win_rates_by_target": {"a": 0.5}, "overall_win_rate": 0.5,
+                           "telemetry_aggregate": {}},
+                "after": {"win_rates_by_target": {"a": 0.5}, "overall_win_rate": 0.5,
+                          "telemetry_aggregate": {}},
+                "delta": {"a": 0.0},
+                "gate": {"passed": True, "checks": {}, "reason": "ok"},
+            }
+            with open(cycle_dir / "promotion_report.json", "w") as f:
+                json.dump(promo_report, f)
+
+            summary = {"total_cycles": 1, "gates_passed": 1, "gates_failed": 0,
+                        "total_cards_added": 0,
+                        "cycles": [{"cycle_index": 0, "gate_passed": True,
+                                    "cards_added": 0, "exit_reason": "success"}]}
+            with open(run_dir / "cycle_summary.json", "w") as f:
+                json.dump(summary, f)
+
+            replays_out = Path(tmp) / "replays_out"
+            replays_out.mkdir()
+            manifest = build_manifest(run_dir, replays_out)
+
+            deltas = manifest["cycles"][0]["deltas"]
+            # mana_wasted and unblocked_damage should be None, not 0.0
+            self.assertIsNone(deltas["mana_wasted"])
+            self.assertIsNone(deltas["unblocked_damage"])
+            self.assertIsNone(deltas["avg_turns"])
 
 
 if __name__ == "__main__":
