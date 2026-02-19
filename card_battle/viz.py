@@ -107,18 +107,22 @@ def build_manifest(run_dir: Path, replays_out_dir: Path) -> dict[str, Any]:
                 "avg_total_turns", 0
             ) - before_telem.get("avg_total_turns", 0)
 
-            before_br = before_telem.get("avg_block_rate", 0)
-            after_br = after_telem.get("avg_block_rate", 0)
-            block_rate_delta = after_br - before_br
+            before_mw = (before_telem.get("avg_p0_mana_wasted", 0)
+                         + before_telem.get("avg_p1_mana_wasted", 0)) / 2
+            after_mw = (after_telem.get("avg_p0_mana_wasted", 0)
+                        + after_telem.get("avg_p1_mana_wasted", 0)) / 2
+            mana_wasted_delta = after_mw - before_mw
 
-            before_ud = before_telem.get("avg_unblocked_damage", 0)
-            after_ud = after_telem.get("avg_unblocked_damage", 0)
+            before_ud = (before_telem.get("avg_p0_unblocked_damage", 0)
+                         + before_telem.get("avg_p1_unblocked_damage", 0)) / 2
+            after_ud = (after_telem.get("avg_p0_unblocked_damage", 0)
+                        + after_telem.get("avg_p1_unblocked_damage", 0)) / 2
             unblocked_dmg_delta = after_ud - before_ud
 
             cycle_entry["deltas"] = {
                 "win_rate": round(wr_delta, 4),
                 "avg_turns": round(avg_turns_delta, 4),
-                "block_rate": round(block_rate_delta, 4),
+                "mana_wasted": round(mana_wasted_delta, 4),
                 "unblocked_damage": round(unblocked_dmg_delta, 4),
             }
 

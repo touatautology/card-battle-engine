@@ -270,7 +270,7 @@ APP_JS = """\
     html += '<div class="delta-grid">';
     html += deltaItemHTML("win_rate", d.win_rate);
     html += deltaItemHTML("avg_turns", d.avg_turns);
-    html += deltaItemHTML("block_rate", d.block_rate);
+    html += deltaItemHTML("mana_waste", d.mana_wasted);
     html += deltaItemHTML("unblk_dmg", d.unblocked_damage);
     html += '</div>';
 
