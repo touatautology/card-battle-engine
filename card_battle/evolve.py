@@ -46,6 +46,9 @@ class EvolutionConfig:
     metrics: dict[str, Any] = field(
         default_factory=lambda: {"top_n_decks": 5}
     )
+    evaluation: dict[str, Any] = field(
+        default_factory=lambda: {}
+    )
 
     @classmethod
     def from_json(cls, path: str | Path, **overrides: Any) -> "EvolutionConfig":
@@ -100,12 +103,15 @@ class EvolutionRunner:
             for k, v in vars(cfg).items()
         })
 
+        policy_mix = cfg.evaluation.get("policies") if cfg.evaluation else None
+
         for gen in range(cfg.generations):
             # 1. Evaluate
             eval_out = evaluate_population(
                 self.population, self.elite_pool, self.card_db,
                 cfg.global_seed, gen, cfg.matches_per_eval,
                 collect_telemetry=telemetry_on,
+                policy_mix=policy_mix,
             )
             if telemetry_on:
                 scored, gen_summaries = eval_out  # type: ignore[misc]
@@ -148,6 +154,11 @@ class EvolutionRunner:
                     if s.get("deck_id") == best_deck.deck_id
                 ]
                 gen_metrics["best_deck"] = aggregate_match_summaries(best_summaries)
+                if policy_mix:
+                    gen_metrics["by_policy_pair"] = aggregate_match_summaries(
+                        gen_summaries,
+                        group_keys=["deck_id", "candidate_policy", "opponent_policy"],
+                    )
                 self._write_json(out / f"gen_{gen:03d}_metrics.json", gen_metrics)
 
             stats = compute_fitness_stats(scored)

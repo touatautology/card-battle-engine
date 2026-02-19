@@ -28,5 +28,18 @@
   "log_every_n": 1,
   "top_n_summary": 5,
   "telemetry": {"enabled": true, "save_match_summaries": false},
-  "metrics": {"top_n_decks": 5}
+  "metrics": {"top_n_decks": 5},
+  "evaluation": {
+    "policies": {
+      "candidates": [
+        {"name": "greedy", "weight": 0.6},
+        {"name": "simple", "weight": 0.3},
+        {"name": "random", "weight": 0.1}
+      ],
+      "opponents": [
+        {"name": "greedy", "weight": 0.7},
+        {"name": "simple", "weight": 0.3}
+      ]
+    }
+  }
 }

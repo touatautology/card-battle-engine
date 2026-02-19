@@ -7,6 +7,7 @@ import glob
 import json
 import sys
 from pathlib import Path
+from typing import Any
 
 from card_battle.ai import GreedyAI, HumanAgent
 from card_battle.display import render_board, render_stats, render_card_adoption
@@ -56,6 +57,10 @@ def main(argv: list[str] | None = None) -> None:
     p_evolve.add_argument("--seed", type=int, default=None, help="Override global seed")
     p_evolve.add_argument("--telemetry", choices=["on", "off"], default=None,
                           help="Override telemetry setting")
+    p_evolve.add_argument("--candidate-policies", default=None,
+                          help="name:weight,... (e.g. greedy:0.6,simple:0.3,random:0.1)")
+    p_evolve.add_argument("--opponent-policies", default=None,
+                          help="name:weight,... (e.g. greedy:0.7,simple:0.3)")
 
     args = parser.parse_args(argv)
 
@@ -147,6 +152,19 @@ def _cmd_stats(args: argparse.Namespace) -> None:
     render_stats(stats)
 
 
+def _parse_policy_arg(arg: str) -> list[dict[str, Any]]:
+    """Parse 'greedy:0.6,simple:0.3' into [{"name": "greedy", "weight": 0.6}, ...]."""
+    entries = []
+    for part in arg.split(","):
+        part = part.strip()
+        if ":" in part:
+            name, weight_str = part.split(":", 1)
+            entries.append({"name": name.strip(), "weight": float(weight_str.strip())})
+        else:
+            entries.append({"name": part.strip(), "weight": 1.0})
+    return entries
+
+
 def _cmd_evolve(args: argparse.Namespace) -> None:
     from card_battle.evolve import EvolutionConfig, EvolutionRunner
 
@@ -163,6 +181,15 @@ def _cmd_evolve(args: argparse.Namespace) -> None:
     # CLI --telemetry overrides config
     if args.telemetry is not None:
         config.telemetry["enabled"] = (args.telemetry == "on")
+
+    # CLI --candidate-policies / --opponent-policies override config
+    if args.candidate_policies or args.opponent_policies:
+        policies = config.evaluation.get("policies", {})
+        if args.candidate_policies:
+            policies["candidates"] = _parse_policy_arg(args.candidate_policies)
+        if args.opponent_policies:
+            policies["opponents"] = _parse_policy_arg(args.opponent_policies)
+        config.evaluation["policies"] = policies
 
     runner = EvolutionRunner(config)
     runner.run()

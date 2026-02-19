@@ -1,8 +1,9 @@
-"""Phase 6: AI agents – ABC, GreedyAI, HumanAgent."""
+"""Phase 6: AI agents – ABC, GreedyAI, RandomAI, SimpleAI, HumanAgent."""
 
 from __future__ import annotations
 
 import copy
+import random
 from abc import ABC, abstractmethod
 
 from card_battle.actions import (
@@ -85,6 +86,49 @@ class GreedyAI(Agent):
             sim = copy.deepcopy(gs)
             apply_action(sim, action)
             _simulate_combat_lookahead(sim, action)
+            score = _evaluate(sim, player_idx)
+            if score > best_score:
+                best_score = score
+                best_action = action
+
+        return best_action
+
+
+# ---------------------------------------------------------------------------
+# RandomAI
+# ---------------------------------------------------------------------------
+
+class RandomAI(Agent):
+    """Uniform random choice from legal actions. Deterministic with seed."""
+
+    def __init__(self, seed: int = 0) -> None:
+        self._rng = random.Random(seed)
+
+    def choose_action(self, gs: GameState, legal_actions: list[Action]) -> Action:
+        return self._rng.choice(legal_actions)
+
+
+# ---------------------------------------------------------------------------
+# SimpleAI
+# ---------------------------------------------------------------------------
+
+class SimpleAI(Agent):
+    """1-step lookahead without combat simulation. Weaker than GreedyAI."""
+
+    def choose_action(self, gs: GameState, legal_actions: list[Action]) -> Action:
+        if gs.phase == "combat_block":
+            player_idx = gs.opponent_idx()
+        else:
+            player_idx = gs.active_player
+
+        best_action = legal_actions[0]
+        best_score = _evaluate(gs, player_idx)
+
+        for action in legal_actions:
+            if isinstance(action, EndTurn):
+                continue
+            sim = copy.deepcopy(gs)
+            apply_action(sim, action)
             score = _evaluate(sim, player_idx)
             if score > best_score:
                 best_score = score
