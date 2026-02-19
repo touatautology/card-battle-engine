@@ -279,7 +279,8 @@ APP_JS = """\
       html += '<div class="replay-links">';
       for (const r of cycleReplays) {
         html += '<a href="replay.html?replay=' + encodeURIComponent(r.replay_id) +
-                '" onclick="event.stopPropagation()">' + r.replay_id + '</a>';
+                '" onclick="event.stopPropagation()" title="' + escapeHTML(r.replay_id) +
+                '">' + escapeHTML(r.display_id || r.replay_id) + '</a>';
       }
       html += '</div>';
     }
@@ -361,7 +362,7 @@ APP_JS = """\
       const maxTurn = turns.length - 1;
       const t = turns[currentTurn];
 
-      let html = '<h1>Replay: ' + escapeHTML(replayId) + '</h1>';
+      let html = '<h1>Replay</h1><p style="font-family:monospace;font-size:0.85rem;color:var(--text-muted);margin-bottom:1rem">' + escapeHTML(replayId) + '</p>';
 
       // Controls
       html += '<div class="player-controls">';

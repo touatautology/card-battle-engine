@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 from typing import Any
@@ -98,6 +99,29 @@ def convert_replay_jsonl_to_json(jsonl_path: Path, out_path: Path) -> str:
         json.dump(events, f, ensure_ascii=False, separators=(",", ":"))
 
     return replay_id
+
+
+def _assign_display_ids(replays: list[dict[str, Any]]) -> None:
+    """Add short ``display_id`` to each replay entry (mutates in place).
+
+    Uses sha256(replay_id)[:8]; if that collides within the run, extends to [:12].
+    """
+    length = 8
+    while True:
+        ids: dict[str, str] = {}
+        collision = False
+        for r in replays:
+            short = hashlib.sha256(r["replay_id"].encode()).hexdigest()[:length]
+            if short in ids and ids[short] != r["replay_id"]:
+                collision = True
+                break
+            ids[short] = r["replay_id"]
+        if not collision or length >= 16:
+            break
+        length = 12
+
+    for r in replays:
+        r["display_id"] = hashlib.sha256(r["replay_id"].encode()).hexdigest()[:length]
 
 
 def build_manifest(run_dir: Path, replays_out_dir: Path) -> dict[str, Any]:
@@ -209,6 +233,9 @@ def build_manifest(run_dir: Path, replays_out_dir: Path) -> dict[str, Any]:
     # Stable sort
     manifest["cycles"].sort(key=lambda c: c["cycle_index"])
     manifest["replays"].sort(key=lambda r: r["replay_id"])
+
+    # Short display IDs for UI
+    _assign_display_ids(manifest["replays"])
 
     return manifest
 

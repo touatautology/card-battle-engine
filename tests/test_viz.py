@@ -8,6 +8,7 @@ import unittest
 from pathlib import Path
 
 from card_battle.viz import (
+    _assign_display_ids,
     build_manifest,
     convert_replay_jsonl_to_json,
     export_static_site,
@@ -228,7 +229,10 @@ class TestBuildManifest(unittest.TestCase):
             self.assertEqual(len(manifest["replays"]), 2)
             for r in manifest["replays"]:
                 self.assertIn("replay_id", r)
+                self.assertIn("display_id", r)
                 self.assertIn("cycle_index", r)
+                # display_id is shorter than replay_id
+                self.assertLessEqual(len(r["display_id"]), len(r["replay_id"]))
                 # Check that JSON file was created
                 json_file = replays_out / f"{r['replay_id']}.json"
                 self.assertTrue(json_file.exists(), f"Missing: {json_file}")
@@ -383,6 +387,36 @@ class TestExtractTelemetryDeltas(unittest.TestCase):
 
         self.assertAlmostEqual(deltas["avg_turns"], -1.0)
         self.assertIsNone(deltas["mana_wasted"])
+
+
+class TestDisplayIds(unittest.TestCase):
+    """Test short display_id assignment."""
+
+    def test_basic_assignment(self) -> None:
+        replays = [
+            {"replay_id": "aggro_rush_vs_control_mage_42"},
+            {"replay_id": "midrange_vs_aggro_rush_99"},
+        ]
+        _assign_display_ids(replays)
+        for r in replays:
+            self.assertIn("display_id", r)
+            self.assertEqual(len(r["display_id"]), 8)
+
+    def test_unique_ids(self) -> None:
+        replays = [
+            {"replay_id": f"deck_a_vs_deck_b_{i}"} for i in range(20)
+        ]
+        _assign_display_ids(replays)
+        display_ids = [r["display_id"] for r in replays]
+        self.assertEqual(len(display_ids), len(set(display_ids)),
+                         "display_ids should be unique within a run")
+
+    def test_deterministic(self) -> None:
+        replays1 = [{"replay_id": "foo_vs_bar_42"}]
+        replays2 = [{"replay_id": "foo_vs_bar_42"}]
+        _assign_display_ids(replays1)
+        _assign_display_ids(replays2)
+        self.assertEqual(replays1[0]["display_id"], replays2[0]["display_id"])
 
 
 class TestManifestNullDeltas(unittest.TestCase):
