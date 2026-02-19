@@ -1,4 +1,4 @@
-"""v0.6.1: Cycle runner — evolve → patterns → cardgen → promote loop."""
+"""v0.7.1: Cycle runner — evolve → patterns → cardgen → promote loop."""
 
 from __future__ import annotations
 
@@ -160,7 +160,7 @@ def _capture_replays(
     cycle_seed: int,
     replay_config: dict[str, Any],
 ) -> list[str]:
-    """Capture replay JSONL for top-K delta matchups."""
+    """Capture replay JSONL for cross-matchup pairs among top-K delta decks."""
     from card_battle.ai import GreedyAI
     from card_battle.engine import init_game, run_game
     from card_battle.loader import load_cards, load_deck
@@ -178,7 +178,14 @@ def _capture_replays(
     with open(report_path, encoding="utf-8") as f:
         report = json.load(f)
 
-    delta = report.get("delta", {})
+    # Support new schema (delta.adapted preferred) and old schema (delta as flat dict)
+    delta_raw = report.get("delta", {})
+    if isinstance(delta_raw, dict) and "adapted" in delta_raw:
+        delta = delta_raw["adapted"]
+    elif isinstance(delta_raw, dict) and "fixed" in delta_raw:
+        delta = delta_raw["fixed"]
+    else:
+        delta = delta_raw
     if not delta:
         return []
 
@@ -188,22 +195,31 @@ def _capture_replays(
     card_db = load_cards(pool_path)
     targets = {load_deck(p, card_db).deck_id: load_deck(p, card_db) for p in target_paths}
 
-    replay_paths: list[str] = []
-    for idx, (deck_id, _) in enumerate(ranked):
-        if deck_id not in targets:
-            continue
+    # Filter to valid targets and do cross-matchup (adjacent circular pairing)
+    valid_ranked = [(did, d) for did, d in ranked if did in targets]
+    if not valid_ranked:
+        return []
 
-        target_deck = targets[deck_id]
-        # Pick any two decks: the target vs itself (simplest valid matchup)
-        # Use the target deck for both sides to demonstrate the matchup
-        gs = init_game(card_db, target_deck, target_deck, cycle_seed + idx)
+    replay_paths: list[str] = []
+    for idx, (deck_id, _) in enumerate(valid_ranked):
+        opponent_idx = (idx + 1) % len(valid_ranked)
+        opponent_id = valid_ranked[opponent_idx][0]
+
+        replay_seed = int.from_bytes(
+            hashlib.sha256(
+                f"{cycle_seed}:replay:{deck_id}:{opponent_id}".encode()
+            ).digest()[:8],
+            "big",
+        )
+
+        gs = init_game(card_db, targets[deck_id], targets[opponent_id], replay_seed)
 
         replay_path = replays_dir / f"matchup_{idx}.jsonl"
         rw = ReplayWriter(replay_path)
         rw.write({
             "type": "meta",
-            "seed": cycle_seed + idx,
-            "deck_ids": [deck_id, deck_id],
+            "seed": replay_seed,
+            "deck_ids": [deck_id, opponent_id],
         })
         run_game(gs, (GreedyAI(), GreedyAI()), replay=rw)
         rw.close()

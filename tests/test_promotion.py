@@ -1,4 +1,4 @@
-"""Tests for v0.5.1: Promotion pipeline."""
+"""Tests for v0.7.1: Promotion pipeline."""
 
 import json
 import os
@@ -6,11 +6,14 @@ import tempfile
 import unittest
 
 from card_battle.loader import load_cards, load_deck
+from card_battle.models import Card
 from card_battle.promotion import (
     IDConflictError,
     _card_dict_to_pool_entry,
+    _card_value_score,
     _list_to_card_db,
     _pool_hash,
+    adapt_targets_for_after,
     apply_promotion,
     compute_gate,
     run_benchmark,
@@ -408,6 +411,197 @@ class TestDeterminism(unittest.TestCase):
                     results.append(json.load(f))
 
         self.assertEqual(results[0], results[1])
+
+
+# -------------------------------------------------------------------------
+# TestCardValueScore
+# -------------------------------------------------------------------------
+
+class TestCardValueScore(unittest.TestCase):
+    def test_unit_atk_plus_hp(self):
+        card = Card(
+            id="u1", name="Unit", cost=2, card_type="unit",
+            tags=(), template="Vanilla", params={"atk": 3, "hp": 2},
+        )
+        self.assertEqual(_card_value_score(card), 5.0)
+
+    def test_spell_damage(self):
+        card = Card(
+            id="s1", name="Spell", cost=4, card_type="spell",
+            tags=(), template="DamagePlayer", params={"amount": 6},
+        )
+        self.assertEqual(_card_value_score(card), 6.0)
+
+    def test_spell_draw(self):
+        card = Card(
+            id="s2", name="Draw", cost=3, card_type="spell",
+            tags=(), template="Draw", params={"n": 2},
+        )
+        self.assertEqual(_card_value_score(card), 4.0)
+
+
+# -------------------------------------------------------------------------
+# TestAdaptTargets
+# -------------------------------------------------------------------------
+
+class TestAdaptTargets(unittest.TestCase):
+    """Tests for adapt_targets_for_after()."""
+
+    def _setup(self):
+        """Load card_db and targets, add a candidate new card."""
+        cards_list = _load_cards_list()
+        # Add a new card to the pool
+        new_card = {
+            "id": "test_adapt_unit",
+            "name": "Adapt Test Unit",
+            "cost": 2,
+            "card_type": "unit",
+            "tags": ["creature"],
+            "template": "Vanilla",
+            "params": {"atk": 4, "hp": 3},
+            "rarity": "uncommon",
+        }
+        cards_after_list = cards_list + [new_card]
+        card_db_after = _list_to_card_db(cards_after_list)
+        card_db_before = _list_to_card_db(cards_list)
+        targets = [load_deck(tp, card_db_before) for tp in TARGET_PATHS]
+        return targets, card_db_after, ["test_adapt_unit"]
+
+    def test_adaptation_injects_new_card(self):
+        targets, card_db_after, new_ids = self._setup()
+        adapted, log = adapt_targets_for_after(
+            targets, new_ids, card_db_after, seed=42,
+            benchmark_config={"matches_per_pair": 1},
+        )
+        # At least one adapted deck should differ from original
+        adapted_ids = [d.deck_id for d in adapted]
+        has_adapted = any("__adapt_" in did for did in adapted_ids)
+        # It's possible no adaptation improves, but the function should return
+        self.assertEqual(len(adapted), len(targets))
+        self.assertEqual(len(log), len(targets))
+        # If adapted, the new card should be in the deck
+        for d in adapted:
+            if "__adapt_" in d.deck_id:
+                card_ids = [e.card_id for e in d.entries]
+                self.assertIn("test_adapt_unit", card_ids)
+
+    def test_adaptation_preserves_deck_size(self):
+        targets, card_db_after, new_ids = self._setup()
+        adapted, _ = adapt_targets_for_after(
+            targets, new_ids, card_db_after, seed=42,
+            benchmark_config={"matches_per_pair": 1},
+        )
+        for d in adapted:
+            total = sum(e.count for e in d.entries)
+            self.assertEqual(total, 30, f"Deck {d.deck_id} has {total} cards")
+
+    def test_adaptation_determinism(self):
+        targets, card_db_after, new_ids = self._setup()
+        r1, l1 = adapt_targets_for_after(
+            targets, new_ids, card_db_after, seed=42,
+            benchmark_config={"matches_per_pair": 1},
+        )
+        r2, l2 = adapt_targets_for_after(
+            targets, new_ids, card_db_after, seed=42,
+            benchmark_config={"matches_per_pair": 1},
+        )
+        self.assertEqual(
+            [d.deck_id for d in r1],
+            [d.deck_id for d in r2],
+        )
+        self.assertEqual(l1, l2)
+
+    def test_no_new_cards_returns_originals(self):
+        targets, card_db_after, _ = self._setup()
+        adapted, log = adapt_targets_for_after(
+            targets, [], card_db_after, seed=42,
+            benchmark_config={"matches_per_pair": 1},
+        )
+        self.assertEqual(adapted, targets)
+        self.assertEqual(log, [])
+
+    def test_adaptation_log_structure(self):
+        targets, card_db_after, new_ids = self._setup()
+        _, log = adapt_targets_for_after(
+            targets, new_ids, card_db_after, seed=42,
+            benchmark_config={"matches_per_pair": 1},
+        )
+        for entry in log:
+            self.assertIn("original_deck_id", entry)
+            self.assertIn("adapted_deck_id", entry)
+            self.assertIn("baseline_win_rate", entry)
+
+
+# -------------------------------------------------------------------------
+# TestPromotionReportSchema
+# -------------------------------------------------------------------------
+
+class TestPromotionReportSchema(unittest.TestCase):
+    """Verify the new two-track report schema."""
+
+    def _run_pipeline(self):
+        cards_list = _load_cards_list()
+        reports = [_sample_report()]
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            selected_path = os.path.join(tmpdir, "selected_cards.json")
+            pool_path = os.path.join(tmpdir, "cards.json")
+            config_path = os.path.join(tmpdir, "config.json")
+            output_dir = os.path.join(tmpdir, "output")
+
+            with open(selected_path, "w") as f:
+                json.dump(reports, f)
+            with open(pool_path, "w") as f:
+                json.dump(cards_list, f)
+
+            config = {
+                "seed": 42,
+                "max_promotions_per_run": 10,
+                "on_id_conflict": "fail",
+                "benchmark": {"matches_per_pair": 1, "policies": None},
+                "gate": {
+                    "max_matchup_winrate": 0.95,
+                    "turns_delta_ratio": 0.20,
+                    "mana_wasted_delta_ratio": 0.20,
+                },
+            }
+            with open(config_path, "w") as f:
+                json.dump(config, f)
+
+            run_promotion(
+                selected_path=selected_path,
+                pool_path=pool_path,
+                target_paths=TARGET_PATHS,
+                config_path=config_path,
+                output_dir=output_dir,
+            )
+
+            with open(os.path.join(output_dir, "promotion_report.json")) as f:
+                return json.load(f)
+
+    def test_report_has_fixed_and_adapted(self):
+        report = self._run_pipeline()
+        # before.fixed
+        self.assertIn("fixed", report["before"])
+        self.assertIn("win_rates_by_target", report["before"]["fixed"])
+        # after.fixed and after.adapted
+        self.assertIn("fixed", report["after"])
+        self.assertIn("adapted", report["after"])
+        # delta.fixed and delta.adapted
+        self.assertIn("fixed", report["delta"])
+        self.assertIn("adapted", report["delta"])
+        # adaptation log
+        self.assertIn("adaptation", report)
+        self.assertIsInstance(report["adaptation"], list)
+        # gate has benchmark_view
+        self.assertIn("benchmark_view", report["gate"])
+
+    def test_delta_fixed_near_zero(self):
+        report = self._run_pipeline()
+        # delta.fixed should be near zero (same decks, same targets)
+        for val in report["delta"]["fixed"].values():
+            self.assertAlmostEqual(val, 0.0, places=2,
+                                   msg="delta.fixed should be ~0")
 
 
 if __name__ == "__main__":

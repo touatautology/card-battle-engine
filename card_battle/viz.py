@@ -1,4 +1,4 @@
-"""v0.7: Log-driven rich visualization — manifest builder & static site export."""
+"""v0.7.1: Log-driven rich visualization — manifest builder & static site export."""
 
 from __future__ import annotations
 
@@ -167,20 +167,42 @@ def build_manifest(run_dir: Path, replays_out_dir: Path) -> dict[str, Any]:
             with open(promo_report_path, encoding="utf-8") as f:
                 promo_report = json.load(f)
 
-            # Win rate delta (average across targets)
-            delta_dict = promo_report.get("delta", {})
+            # Win rate delta — new schema (delta.adapted) preferred, then
+            # delta.fixed, then old flat schema (delta with deck_id keys)
+            delta_raw = promo_report.get("delta", {})
+            if isinstance(delta_raw, dict) and "adapted" in delta_raw:
+                delta_dict = delta_raw["adapted"]
+            elif isinstance(delta_raw, dict) and "fixed" in delta_raw:
+                delta_dict = delta_raw["fixed"]
+            else:
+                delta_dict = delta_raw
+
             if delta_dict:
                 wr_delta: float | None = sum(delta_dict.values()) / len(delta_dict)
             else:
                 wr_delta = None
 
-            # Telemetry deltas (None when source field absent)
-            before_telem = promo_report.get("before", {}).get(
-                "telemetry_aggregate", {}
-            )
-            after_telem = promo_report.get("after", {}).get(
-                "telemetry_aggregate", {}
-            )
+            # Telemetry deltas — new schema nests under before.fixed /
+            # after.adapted; old schema has telemetry_aggregate directly
+            before_data = promo_report.get("before", {})
+            if "fixed" in before_data:
+                before_telem = before_data["fixed"].get(
+                    "telemetry_aggregate", {}
+                )
+            else:
+                before_telem = before_data.get("telemetry_aggregate", {})
+
+            after_data = promo_report.get("after", {})
+            if "adapted" in after_data:
+                after_telem = after_data["adapted"].get(
+                    "telemetry_aggregate", {}
+                )
+            elif "fixed" in after_data:
+                after_telem = after_data["fixed"].get(
+                    "telemetry_aggregate", {}
+                )
+            else:
+                after_telem = after_data.get("telemetry_aggregate", {})
             telem_deltas = extract_telemetry_deltas(before_telem, after_telem)
 
             cycle_entry["deltas"] = {

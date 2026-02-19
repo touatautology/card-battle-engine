@@ -1,4 +1,4 @@
-"""Tests for v0.7 visualization module."""
+"""Tests for v0.7.1 visualization module."""
 
 from __future__ import annotations
 
@@ -82,32 +82,48 @@ def _make_run_dir(base: Path, *, num_cycles: int = 2,
         # promotion_report.json
         promo_dir = cycle_dir / "promote"
         promo_dir.mkdir(parents=True, exist_ok=True)
+        _telem_before = {
+            "avg_total_turns": 10.0,
+            "avg_p0_mana_wasted": 1.5,
+            "avg_p1_mana_wasted": 1.8,
+            "avg_p0_unblocked_damage": 3.0,
+            "avg_p1_unblocked_damage": 2.5,
+        }
+        _telem_after = {
+            "avg_total_turns": 9.6,
+            "avg_p0_mana_wasted": 1.3,
+            "avg_p1_mana_wasted": 1.6,
+            "avg_p0_unblocked_damage": 1.9,
+            "avg_p1_unblocked_damage": 2.0,
+        }
         promo_report = {
             "before": {
-                "win_rates_by_target": {"aggro_rush": 0.50, "control_mage": 0.50},
-                "overall_win_rate": 0.50,
-                "telemetry_aggregate": {
-                    "avg_total_turns": 10.0,
-                    "avg_p0_mana_wasted": 1.5,
-                    "avg_p1_mana_wasted": 1.8,
-                    "avg_p0_unblocked_damage": 3.0,
-                    "avg_p1_unblocked_damage": 2.5,
+                "fixed": {
+                    "win_rates_by_target": {"aggro_rush": 0.50, "control_mage": 0.50},
+                    "overall_win_rate": 0.50,
+                    "telemetry_aggregate": _telem_before,
                 },
             },
             "after": {
-                "win_rates_by_target": {"aggro_rush": 0.52, "control_mage": 0.48},
-                "overall_win_rate": 0.50,
-                "telemetry_aggregate": {
-                    "avg_total_turns": 9.6,
-                    "avg_p0_mana_wasted": 1.3,
-                    "avg_p1_mana_wasted": 1.6,
-                    "avg_p0_unblocked_damage": 1.9,
-                    "avg_p1_unblocked_damage": 2.0,
+                "fixed": {
+                    "win_rates_by_target": {"aggro_rush": 0.52, "control_mage": 0.48},
+                    "overall_win_rate": 0.50,
+                    "telemetry_aggregate": _telem_after,
+                },
+                "adapted": {
+                    "win_rates_by_target": {"aggro_rush": 0.53, "control_mage": 0.49},
+                    "overall_win_rate": 0.51,
+                    "telemetry_aggregate": _telem_after,
                 },
             },
-            "delta": {"aggro_rush": 0.02, "control_mage": -0.02},
+            "delta": {
+                "fixed": {"aggro_rush": 0.02, "control_mage": -0.02},
+                "adapted": {"aggro_rush": 0.03, "control_mage": -0.01},
+            },
+            "adaptation": [],
             "gate": {
                 "passed": gate_passed,
+                "benchmark_view": "fixed",
                 "checks": {
                     "max_matchup_winrate": {"passed": True, "threshold": 0.95, "actual": 0.52},
                     "turns_delta_ratio": {"passed": True, "threshold": 0.20, "actual": 0.04},
@@ -457,6 +473,65 @@ class TestManifestNullDeltas(unittest.TestCase):
             self.assertIsNone(deltas["mana_wasted"])
             self.assertIsNone(deltas["unblocked_damage"])
             self.assertIsNone(deltas["avg_turns"])
+
+
+class TestOldSchemaFallback(unittest.TestCase):
+    """Verify that old-format promotion_report.json is still readable."""
+
+    def test_old_schema_deltas_and_telemetry(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            run_dir = Path(tmp) / "run"
+            run_dir.mkdir()
+
+            cycle_dir = run_dir / "cycles" / "cycle_000" / "promote"
+            cycle_dir.mkdir(parents=True)
+            # Old schema: no fixed/adapted nesting
+            promo_report = {
+                "before": {
+                    "win_rates_by_target": {"aggro_rush": 0.50},
+                    "overall_win_rate": 0.50,
+                    "telemetry_aggregate": {
+                        "avg_total_turns": 10.0,
+                        "avg_p0_mana_wasted": 1.5,
+                        "avg_p1_mana_wasted": 1.8,
+                    },
+                },
+                "after": {
+                    "win_rates_by_target": {"aggro_rush": 0.55},
+                    "overall_win_rate": 0.55,
+                    "telemetry_aggregate": {
+                        "avg_total_turns": 9.5,
+                        "avg_p0_mana_wasted": 1.2,
+                        "avg_p1_mana_wasted": 1.5,
+                    },
+                },
+                "delta": {"aggro_rush": 0.05},
+                "gate": {"passed": True, "checks": {}, "reason": "ok"},
+            }
+            with open(cycle_dir / "promotion_report.json", "w") as f:
+                json.dump(promo_report, f)
+
+            summary = {
+                "total_cycles": 1, "gates_passed": 1, "gates_failed": 0,
+                "total_cards_added": 0,
+                "cycles": [{"cycle_index": 0, "gate_passed": True,
+                            "cards_added": 0, "exit_reason": "success"}],
+            }
+            with open(run_dir / "cycle_summary.json", "w") as f:
+                json.dump(summary, f)
+
+            replays_out = Path(tmp) / "replays_out"
+            replays_out.mkdir()
+            manifest = build_manifest(run_dir, replays_out)
+
+            c0 = manifest["cycles"][0]
+            self.assertIn("deltas", c0)
+            # win_rate should be 0.05
+            self.assertAlmostEqual(c0["deltas"]["win_rate"], 0.05, places=3)
+            # avg_turns should be -0.5
+            self.assertAlmostEqual(c0["deltas"]["avg_turns"], -0.5, places=3)
+            # mana_wasted should be computed
+            self.assertIsNotNone(c0["deltas"]["mana_wasted"])
 
 
 if __name__ == "__main__":

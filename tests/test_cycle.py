@@ -1,4 +1,4 @@
-"""Tests for v0.6.1: Cycle runner."""
+"""Tests for v0.7.1: Cycle runner."""
 
 import json
 import os
@@ -6,7 +6,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from card_battle.cycle import _derive_cycle_seed, _pool_hash, run_cycle
+from card_battle.cycle import _capture_replays, _derive_cycle_seed, _pool_hash, run_cycle
 
 DATA_DIR = os.path.join(os.path.dirname(__file__), "..", "data")
 CONFIGS_DIR = os.path.join(os.path.dirname(__file__), "..", "configs")
@@ -240,6 +240,98 @@ class TestCycleOverrides(unittest.TestCase):
             # Cycle seed should be derived from 999, not 42
             expected_seed = _derive_cycle_seed(999, 0)
             self.assertEqual(result["cycles"][0]["cycle_seed"], expected_seed)
+
+
+class TestCaptureReplays(unittest.TestCase):
+    """Test that _capture_replays produces cross-matchup (not mirror) replays."""
+
+    def _setup_replay_dir(self, tmpdir: str, delta: dict) -> tuple[Path, list[str]]:
+        """Create a minimal cycle dir with a promotion_report containing the given delta."""
+        cycle_dir = Path(tmpdir) / "cycle_000"
+        promo_dir = cycle_dir / "promote"
+        promo_dir.mkdir(parents=True)
+        promo_report = {
+            "before": {"fixed": {
+                "win_rates_by_target": {k: 0.5 for k in delta},
+                "overall_win_rate": 0.5,
+                "telemetry_aggregate": {},
+            }},
+            "after": {"fixed": {
+                "win_rates_by_target": {k: 0.5 + v for k, v in delta.items()},
+                "overall_win_rate": 0.5,
+                "telemetry_aggregate": {},
+            }, "adapted": {
+                "win_rates_by_target": {k: 0.5 + v for k, v in delta.items()},
+                "overall_win_rate": 0.5,
+                "telemetry_aggregate": {},
+            }},
+            "delta": {"fixed": delta, "adapted": delta},
+            "gate": {"passed": True, "checks": {}, "reason": "ok"},
+        }
+        with open(promo_dir / "promotion_report.json", "w") as f:
+            json.dump(promo_report, f)
+        return cycle_dir, TARGET_PATHS
+
+    def test_replays_are_cross_matchups(self):
+        """With multiple targets, replays should not be mirror matches."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            delta = {
+                "aggro_rush": 0.05,
+                "control_mage": -0.03,
+                "midrange": 0.01,
+            }
+            cycle_dir, target_paths = self._setup_replay_dir(tmpdir, delta)
+            replay_config = {"top_k_matchups": 3}
+
+            paths = _capture_replays(
+                cycle_dir, Path(CARDS_JSON), target_paths,
+                cycle_seed=42, replay_config=replay_config,
+            )
+            self.assertGreater(len(paths), 0)
+
+            # Read each replay and check deck_ids are different
+            for rp in paths:
+                with open(rp, encoding="utf-8") as f:
+                    for line in f:
+                        ev = json.loads(line)
+                        if ev.get("type") == "meta":
+                            deck_ids = ev.get("deck_ids", [])
+                            if len(deck_ids) == 2:
+                                # With 3 targets, at least some should be cross
+                                # (all are cross with circular pairing)
+                                self.assertNotEqual(
+                                    deck_ids[0], deck_ids[1],
+                                    f"Mirror match found: {deck_ids}",
+                                )
+                            break
+
+    def test_replay_seed_determinism(self):
+        """Same cycle_seed should produce identical replays."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            delta = {"aggro_rush": 0.05, "control_mage": -0.03}
+
+            # Run 1
+            cycle_dir1, target_paths = self._setup_replay_dir(
+                os.path.join(tmpdir, "r1"), delta,
+            )
+            paths1 = _capture_replays(
+                cycle_dir1, Path(CARDS_JSON), target_paths,
+                cycle_seed=42, replay_config={"top_k_matchups": 2},
+            )
+
+            # Run 2
+            cycle_dir2, _ = self._setup_replay_dir(
+                os.path.join(tmpdir, "r2"), delta,
+            )
+            paths2 = _capture_replays(
+                cycle_dir2, Path(CARDS_JSON), target_paths,
+                cycle_seed=42, replay_config={"top_k_matchups": 2},
+            )
+
+            self.assertEqual(len(paths1), len(paths2))
+            for p1, p2 in zip(paths1, paths2):
+                with open(p1) as f1, open(p2) as f2:
+                    self.assertEqual(f1.read(), f2.read())
 
 
 if __name__ == "__main__":

@@ -1,4 +1,4 @@
-"""v0.5.1: Promotion pipeline — selected cards → card pool."""
+"""v0.7.1: Promotion pipeline — selected cards → card pool."""
 
 from __future__ import annotations
 
@@ -8,9 +8,15 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from card_battle.evaluation import PolicyMix, evaluate_targets, telemetry_aggregate
+from card_battle.evaluation import (
+    PolicyMix,
+    evaluate_deck_vs_pool,
+    evaluate_targets,
+    telemetry_aggregate,
+)
 from card_battle.loader import load_cards, load_deck, validate_card
 from card_battle.models import Card, DeckDef
+from card_battle.mutation import counts_to_deck, deck_to_counts, validate_counts
 
 
 class IDConflictError(Exception):
@@ -66,6 +72,144 @@ def _list_to_card_db(cards_list: list[dict[str, Any]]) -> dict[str, Card]:
 def _write_json(path: Path, data: Any) -> None:
     with open(path, "w", encoding="utf-8") as f:
         json.dump(data, f, indent=2, ensure_ascii=False)
+
+
+def _card_value_score(card: Card) -> float:
+    """Simple heuristic score for a card — used by adaptation to pick removal targets."""
+    if card.is_unit:
+        return card.params.get("atk", 0) + card.params.get("hp", 0)
+    return card.params.get("amount", 0) + card.params.get("n", 0) * 2
+
+
+def adapt_targets_for_after(
+    targets: list[DeckDef],
+    new_card_ids: list[str],
+    card_db_after: dict[str, Card],
+    seed: int,
+    benchmark_config: dict[str, Any],
+) -> tuple[list[DeckDef], list[dict[str, Any]]]:
+    """Create adapted target decks that incorporate new cards.
+
+    For each target deck, tries injecting each new card at count 1/2/3,
+    removing same-cost-band cards with the lowest value score. Picks the
+    best-performing variant via quick evaluation.
+
+    Returns (adapted_targets, adaptation_log).
+    """
+    if not new_card_ids:
+        return (targets, [])
+
+    adaptation_log: list[dict[str, Any]] = []
+    adapted_targets: list[DeckDef] = []
+
+    for target in targets:
+        # Build elite pool = other original targets (for quick eval)
+        elite_pool = [t for t in targets if t.deck_id != target.deck_id]
+        if not elite_pool:
+            # Single target — cannot evaluate, keep original
+            adapted_targets.append(target)
+            continue
+
+        # Derive a deterministic seed for this target's adaptation
+        adapt_seed_bytes = hashlib.sha256(
+            f"{seed}:{target.deck_id}:adapt".encode()
+        ).digest()[:8]
+        adapt_seed = int.from_bytes(adapt_seed_bytes, "big")
+
+        base_counts = deck_to_counts(target)
+
+        # Evaluate baseline
+        baseline_wr = evaluate_deck_vs_pool(
+            target, elite_pool, card_db_after,
+            global_seed=adapt_seed, generation=999,
+            matches_per_opponent=1,
+        )
+        if isinstance(baseline_wr, tuple):
+            baseline_wr = baseline_wr[0]
+
+        best_variant: DeckDef | None = None
+        best_wr = baseline_wr
+        best_info: dict[str, Any] = {}
+
+        for new_card_id in new_card_ids:
+            if new_card_id not in card_db_after:
+                continue
+            new_card = card_db_after[new_card_id]
+
+            for k in (1, 2, 3):
+                counts = dict(base_counts)
+
+                # Find same-cost-band cards (±1) sorted by value score ascending
+                removable = []
+                for cid, cnt in counts.items():
+                    if cid not in card_db_after:
+                        continue
+                    c = card_db_after[cid]
+                    if abs(c.cost - new_card.cost) <= 1:
+                        removable.append((cid, _card_value_score(c), cnt))
+                removable.sort(key=lambda x: x[1])
+
+                # Remove k copies from lowest-value cards in the cost band
+                to_remove = k
+                for cid, _score, cnt in removable:
+                    if to_remove <= 0:
+                        break
+                    can_remove = min(to_remove, cnt)
+                    counts[cid] -= can_remove
+                    if counts[cid] == 0:
+                        del counts[cid]
+                    to_remove -= can_remove
+
+                if to_remove > 0:
+                    continue  # couldn't remove enough
+
+                # Inject new card
+                counts[new_card_id] = counts.get(new_card_id, 0) + k
+
+                if not validate_counts(counts):
+                    continue
+
+                variant_id = f"{target.deck_id}__adapt_{new_card_id}_x{k}"
+                try:
+                    variant = counts_to_deck(variant_id, counts)
+                except ValueError:
+                    continue
+
+                var_wr = evaluate_deck_vs_pool(
+                    variant, elite_pool, card_db_after,
+                    global_seed=adapt_seed, generation=999,
+                    matches_per_opponent=1,
+                )
+                if isinstance(var_wr, tuple):
+                    var_wr = var_wr[0]
+
+                if var_wr > best_wr:
+                    best_wr = var_wr
+                    best_variant = variant
+                    best_info = {
+                        "new_card_id": new_card_id,
+                        "count": k,
+                        "win_rate": round(var_wr, 4),
+                    }
+
+        if best_variant is not None:
+            adapted_targets.append(best_variant)
+            adaptation_log.append({
+                "original_deck_id": target.deck_id,
+                "adapted_deck_id": best_variant.deck_id,
+                "baseline_win_rate": round(baseline_wr, 4),
+                **best_info,
+            })
+        else:
+            adapted_targets.append(target)
+            adaptation_log.append({
+                "original_deck_id": target.deck_id,
+                "adapted_deck_id": target.deck_id,
+                "baseline_win_rate": round(baseline_wr, 4),
+                "note": "no_improvement_found",
+            })
+
+    return (adapted_targets, adaptation_log)
 
 
 # -------------------------------------------------------------------------
@@ -273,37 +417,74 @@ def run_promotion(
     for tp in target_paths:
         targets.append(load_deck(tp, card_db_before))
 
-    # 7. Before benchmark
-    print("Running before benchmark...")
-    before_result = run_benchmark(card_db_before, targets, seed, benchmark_config)
+    # 7. Before benchmark (fixed targets, before card pool)
+    print("Running before benchmark (fixed)...")
+    before_fixed = run_benchmark(card_db_before, targets, seed, benchmark_config)
 
-    # 8. After benchmark
-    print("Running after benchmark...")
-    after_result = run_benchmark(card_db_after, targets, seed, benchmark_config)
+    # 7.5. Adapt targets for after card pool
+    new_card_ids = [a["id"] for a in patch["added"]]
+    adapted_targets, adaptation_log = adapt_targets_for_after(
+        targets, new_card_ids, card_db_after, seed, benchmark_config,
+    )
 
-    # 9. Delta
-    delta: dict[str, Any] = {}
-    for did in before_result["win_rates_by_target"]:
-        b = before_result["win_rates_by_target"].get(did, 0.5)
-        a = after_result["win_rates_by_target"].get(did, 0.5)
-        delta[did] = round(a - b, 4)
+    # 8a. After benchmark (fixed targets, after card pool)
+    print("Running after benchmark (fixed)...")
+    after_fixed = run_benchmark(card_db_after, targets, seed, benchmark_config)
 
-    # 10. Gate
-    gate_result = compute_gate(before_result, after_result, gate_config)
+    # 8b. After benchmark (adapted targets, after card pool)
+    print("Running after benchmark (adapted)...")
+    after_adapted = run_benchmark(card_db_after, adapted_targets, seed, benchmark_config)
 
-    # 11. Promotion report
+    # 9. Deltas
+    delta_fixed: dict[str, Any] = {}
+    for did in before_fixed["win_rates_by_target"]:
+        b = before_fixed["win_rates_by_target"].get(did, 0.5)
+        a = after_fixed["win_rates_by_target"].get(did, 0.5)
+        delta_fixed[did] = round(a - b, 4)
+
+    # For adapted delta, map adapted deck_ids back to original deck_ids
+    delta_adapted: dict[str, Any] = {}
+    after_adapted_normalized: dict[str, Any] = {
+        "win_rates_by_target": {},
+        "overall_win_rate": after_adapted["overall_win_rate"],
+        "telemetry_aggregate": after_adapted["telemetry_aggregate"],
+        "summaries": after_adapted["summaries"],
+    }
+    for adapted_did, wr in after_adapted["win_rates_by_target"].items():
+        original_id = adapted_did.split("__adapt_")[0]
+        after_adapted_normalized["win_rates_by_target"][original_id] = wr
+        b = before_fixed["win_rates_by_target"].get(original_id, 0.5)
+        delta_adapted[original_id] = round(wr - b, 4)
+
+    # 10. Gate — benchmark_view selects which after data to use
+    benchmark_view = gate_config.get("benchmark_view", "fixed")
+    if benchmark_view == "adapted":
+        gate_result = compute_gate(before_fixed, after_adapted_normalized, gate_config)
+    else:
+        gate_result = compute_gate(before_fixed, after_fixed, gate_config)
+    gate_result["benchmark_view"] = benchmark_view
+
+    # 11. Promotion report (new two-track schema)
+    def _bench_summary(result: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "win_rates_by_target": result["win_rates_by_target"],
+            "overall_win_rate": result["overall_win_rate"],
+            "telemetry_aggregate": result["telemetry_aggregate"],
+        }
+
     report = {
         "before": {
-            "win_rates_by_target": before_result["win_rates_by_target"],
-            "overall_win_rate": before_result["overall_win_rate"],
-            "telemetry_aggregate": before_result["telemetry_aggregate"],
+            "fixed": _bench_summary(before_fixed),
         },
         "after": {
-            "win_rates_by_target": after_result["win_rates_by_target"],
-            "overall_win_rate": after_result["overall_win_rate"],
-            "telemetry_aggregate": after_result["telemetry_aggregate"],
+            "fixed": _bench_summary(after_fixed),
+            "adapted": _bench_summary(after_adapted_normalized),
         },
-        "delta": delta,
+        "delta": {
+            "fixed": delta_fixed,
+            "adapted": delta_adapted,
+        },
+        "adaptation": adaptation_log,
         "gate": gate_result,
         "patch_summary": {
             "added": len(patch["added"]),
