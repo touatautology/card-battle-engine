@@ -130,6 +130,15 @@ def main(argv: list[str] | None = None) -> None:
     p_replay.add_argument("--to-turn", type=int, default=None,
                           help="Stop displaying after this turn")
 
+    # --- cycle ---
+    p_cycle = sub.add_parser("cycle", help="Run full pipeline loop (evolve->patterns->cardgen->promote)")
+    p_cycle.add_argument("--config", required=True, help="Path to cycle config JSON")
+    p_cycle.add_argument("--output", default="output/cycle", help="Output directory")
+    p_cycle.add_argument("--cycles", type=int, default=None, help="Override number of cycles")
+    p_cycle.add_argument("--seed", type=int, default=None, help="Override global seed")
+    p_cycle.add_argument("--replay", choices=["on", "off"], default=None,
+                         help="Override replay capture")
+
     args = parser.parse_args(argv)
 
     if args.command is None:
@@ -152,6 +161,8 @@ def main(argv: list[str] | None = None) -> None:
         _cmd_promote(args)
     elif args.command == "replay":
         _cmd_replay(args)
+    elif args.command == "cycle":
+        _cmd_cycle(args)
 
 
 def _cmd_play(args: argparse.Namespace) -> None:
@@ -373,4 +384,20 @@ def _cmd_replay(args: argparse.Namespace) -> None:
         from_turn=args.from_turn,
         to_turn=args.to_turn,
         compact=args.compact,
+    )
+
+
+def _cmd_cycle(args: argparse.Namespace) -> None:
+    from card_battle.cycle import run_cycle
+
+    replay_override = None
+    if args.replay is not None:
+        replay_override = (args.replay == "on")
+
+    run_cycle(
+        config_path=args.config,
+        output_dir=args.output,
+        cycles_override=args.cycles,
+        seed_override=args.seed,
+        replay_override=replay_override,
     )

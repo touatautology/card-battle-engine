@@ -1,0 +1,22 @@
+{
+  "version": "0.6.1",
+  "cycles": 3,
+  "seed": 42,
+  "paths": {
+    "pool": "data/cards.json",
+    "targets": [
+      "data/decks/aggro_rush.json",
+      "data/decks/control_mage.json",
+      "data/decks/midrange.json"
+    ],
+    "evolve_config": "configs/evolve_v0_3.json",
+    "patterns_config": "configs/patterns_v0_4.json",
+    "cardgen_config": "configs/generate_v0_6.json",
+    "constraints": "configs/constraints_v0_6.json",
+    "promotion_config": "configs/promotion_v0_5_1.json"
+  },
+  "replay": {
+    "enabled": false,
+    "top_k_matchups": 3
+  }
+}
