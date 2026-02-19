@@ -1,0 +1,30 @@
+{
+  "seed": 42,
+  "top_patterns_per_type": {
+    "counter": 10,
+    "sequence": 5,
+    "cooccurrence": 5
+  },
+  "candidates_per_pattern": 2,
+  "mode_weights": {
+    "suppress": 0.7,
+    "support": 0.3
+  },
+  "suppress_templates": ["HealSelf", "RemoveUnit", "Vanilla"],
+  "support_templates": ["OnPlayDraw", "Vanilla", "Draw"],
+  "adoption": {
+    "matches_per_eval": 1,
+    "policy_mix": {
+      "candidates": [{"name": "greedy", "weight": 1.0}],
+      "opponents": [{"name": "greedy", "weight": 1.0}]
+    },
+    "acceptance": {
+      "min_overall_delta": 0.02,
+      "max_win_rate": 0.95,
+      "max_turns_delta_pct": 0.20,
+      "max_mana_wasted_delta_pct": 0.50
+    },
+    "max_copies_to_test": 3,
+    "selected_top_n": 10
+  }
+}

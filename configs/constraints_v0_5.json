@@ -1,0 +1,54 @@
+{
+  "templates": {
+    "HealSelf": {
+      "card_type": "spell",
+      "cost_range": [1, 4],
+      "tags": ["heal"],
+      "params_ranges": {"amount": [2, 6]}
+    },
+    "RemoveUnit": {
+      "card_type": "spell",
+      "cost_range": [1, 4],
+      "tags": ["removal"],
+      "params_ranges": {"max_hp": [1, 4]}
+    },
+    "DamagePlayer": {
+      "card_type": "spell",
+      "cost_range": [1, 5],
+      "tags": ["damage"],
+      "params_ranges": {"amount": [1, 6]}
+    },
+    "Vanilla": {
+      "card_type": "unit",
+      "cost_range": [1, 6],
+      "tags": ["creature"],
+      "params_ranges": {"atk": [1, 6], "hp": [1, 8]}
+    },
+    "OnPlayDraw": {
+      "card_type": "unit",
+      "cost_range": [2, 6],
+      "tags": ["creature"],
+      "params_ranges": {"atk": [1, 4], "hp": [1, 5], "n": [1, 3]}
+    },
+    "OnPlayDamagePlayer": {
+      "card_type": "unit",
+      "cost_range": [1, 5],
+      "tags": ["creature"],
+      "params_ranges": {"atk": [1, 4], "hp": [1, 4], "amount": [1, 3]}
+    },
+    "Draw": {
+      "card_type": "spell",
+      "cost_range": [1, 5],
+      "tags": ["draw"],
+      "params_ranges": {"n": [1, 3]}
+    }
+  },
+  "global": {
+    "max_new_cards": 50,
+    "forbid": [
+      {"template": "RemoveUnit", "condition": "max_hp >= 4 and cost <= 2"},
+      {"template": "DamagePlayer", "condition": "amount >= 5 and cost <= 2"},
+      {"template": "Vanilla", "condition": "atk + hp >= cost * 3 + 2"}
+    ]
+  }
+}

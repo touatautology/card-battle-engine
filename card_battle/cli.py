@@ -71,6 +71,17 @@ def main(argv: list[str] | None = None) -> None:
     p_pat.add_argument("--output", default="patterns.json",
                        help="Output path for patterns.json")
 
+    # --- cardgen ---
+    p_cg = sub.add_parser("cardgen", help="Generate and test new card candidates")
+    p_cg.add_argument("--patterns", required=True, help="Path to patterns.json")
+    p_cg.add_argument("--pool", default=str(DEFAULT_CARDS), help="Path to card pool JSON")
+    p_cg.add_argument("--targets", nargs="+", required=True,
+                       help="Paths to target deck JSON files")
+    p_cg.add_argument("--constraints", required=True,
+                       help="Path to constraints JSON")
+    p_cg.add_argument("--config", required=True, help="Path to generation config JSON")
+    p_cg.add_argument("--output", default="output/cardgen", help="Output directory")
+
     args = parser.parse_args(argv)
 
     if args.command is None:
@@ -87,6 +98,8 @@ def main(argv: list[str] | None = None) -> None:
         _cmd_evolve(args)
     elif args.command == "patterns":
         _cmd_patterns(args)
+    elif args.command == "cardgen":
+        _cmd_cardgen(args)
 
 
 def _cmd_play(args: argparse.Namespace) -> None:
@@ -230,3 +243,19 @@ def _cmd_patterns(args: argparse.Namespace) -> None:
     for t, c in sorted(type_counts.items()):
         print(f"  {t}: {c}")
     print(f"Written to: {args.output}")
+
+
+def _cmd_cardgen(args: argparse.Namespace) -> None:
+    from card_battle.cardgen import run_cardgen
+
+    result = run_cardgen(
+        patterns_path=args.patterns,
+        pool_path=args.pool,
+        target_paths=args.targets,
+        constraints_path=args.constraints,
+        config_path=args.config,
+        output_dir=args.output,
+    )
+    print(f"\nCardgen complete: {result['total_candidates']} candidates, "
+          f"{result['total_selected']} selected")
+    print(f"Artifacts in: {args.output}")
