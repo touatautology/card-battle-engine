@@ -46,6 +46,13 @@ def main(argv: list[str] | None = None) -> None:
     p_stats = sub.add_parser("stats", help="Show stats from match logs")
     p_stats.add_argument("--logs", required=True, help="Path to match_logs.json")
 
+    # --- evolve ---
+    p_evolve = sub.add_parser("evolve", help="Evolve decks via evolutionary search")
+    p_evolve.add_argument("--config", required=True, help="Path to evolution config JSON")
+    p_evolve.add_argument("--output", default=None, help="Override output directory")
+    p_evolve.add_argument("--generations", type=int, default=None, help="Override generations count")
+    p_evolve.add_argument("--seed", type=int, default=None, help="Override global seed")
+
     args = parser.parse_args(argv)
 
     if args.command is None:
@@ -58,6 +65,8 @@ def main(argv: list[str] | None = None) -> None:
         _cmd_simulate(args)
     elif args.command == "stats":
         _cmd_stats(args)
+    elif args.command == "evolve":
+        _cmd_evolve(args)
 
 
 def _cmd_play(args: argparse.Namespace) -> None:
@@ -128,3 +137,19 @@ def _cmd_stats(args: argparse.Namespace) -> None:
 
     stats = aggregate(logs)
     render_stats(stats)
+
+
+def _cmd_evolve(args: argparse.Namespace) -> None:
+    from card_battle.evolve import EvolutionConfig, EvolutionRunner
+
+    overrides: dict = {}
+    if args.output is not None:
+        overrides["output_dir"] = args.output
+    if args.generations is not None:
+        overrides["generations"] = args.generations
+    if args.seed is not None:
+        overrides["global_seed"] = args.seed
+
+    config = EvolutionConfig.from_json(args.config, **overrides)
+    runner = EvolutionRunner(config)
+    runner.run()

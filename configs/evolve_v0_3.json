@@ -1,0 +1,30 @@
+{
+  "global_seed": 42,
+  "generations": 20,
+  "population_size": 30,
+  "matches_per_eval": 2,
+  "elite_pool_size": 5,
+  "elitism": 3,
+  "tournament_k": 4,
+  "mutation_weights": {
+    "swap_one": 0.5,
+    "swap_n": 0.3,
+    "tweak_counts": 0.2
+  },
+  "swap_n_range": [2, 5],
+  "cards_path": "data/cards.json",
+  "seed_decks": [
+    "data/decks/aggro_rush.json",
+    "data/decks/control_mage.json",
+    "data/decks/midrange.json"
+  ],
+  "initial_population": "seed_decks",
+  "output_dir": "output/evolve",
+  "baseline_decks": [
+    "data/decks/aggro_rush.json",
+    "data/decks/control_mage.json",
+    "data/decks/midrange.json"
+  ],
+  "log_every_n": 1,
+  "top_n_summary": 5
+}
