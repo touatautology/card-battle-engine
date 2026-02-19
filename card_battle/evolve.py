@@ -40,6 +40,12 @@ class EvolutionConfig:
     baseline_decks: list[str] = field(default_factory=list)
     log_every_n: int = 1
     top_n_summary: int = 5
+    telemetry: dict[str, Any] = field(
+        default_factory=lambda: {"enabled": False, "save_match_summaries": False}
+    )
+    metrics: dict[str, Any] = field(
+        default_factory=lambda: {"top_n_decks": 5}
+    )
 
     @classmethod
     def from_json(cls, path: str | Path, **overrides: Any) -> "EvolutionConfig":
@@ -79,6 +85,7 @@ class EvolutionRunner:
         cfg = self.config
         out = Path(cfg.output_dir)
         out.mkdir(parents=True, exist_ok=True)
+        telemetry_on = cfg.telemetry.get("enabled", False)
 
         # Load cards
         self.card_db = load_cards(cfg.cards_path)
@@ -95,10 +102,16 @@ class EvolutionRunner:
 
         for gen in range(cfg.generations):
             # 1. Evaluate
-            scored = evaluate_population(
+            eval_out = evaluate_population(
                 self.population, self.elite_pool, self.card_db,
                 cfg.global_seed, gen, cfg.matches_per_eval,
+                collect_telemetry=telemetry_on,
             )
+            if telemetry_on:
+                scored, gen_summaries = eval_out  # type: ignore[misc]
+            else:
+                scored = eval_out  # type: ignore[assignment]
+                gen_summaries = []
 
             # 2. Update elite pool (top N across all time)
             self._update_elite_pool(scored)
@@ -115,6 +128,27 @@ class EvolutionRunner:
             # 4. Output artifacts
             if gen % cfg.log_every_n == 0:
                 self._write_generation(out, gen, scored)
+
+            # 4b. Output telemetry metrics
+            if telemetry_on and gen_summaries:
+                from card_battle.metrics import aggregate_match_summaries
+                gen_metrics = aggregate_match_summaries(
+                    gen_summaries, group_keys=["deck_id"],
+                )
+                # Add top-N deck breakdown
+                top_n = cfg.metrics.get("top_n_decks", 5)
+                ranked = sorted(scored, key=lambda x: x[1], reverse=True)
+                top_ids = {d.deck_id for d, _ in ranked[:top_n]}
+                top_summaries = [s for s in gen_summaries if s.get("deck_id") in top_ids]
+                gen_metrics["top_n_decks"] = aggregate_match_summaries(
+                    top_summaries, group_keys=["deck_id"],
+                )
+                best_summaries = [
+                    s for s in gen_summaries
+                    if s.get("deck_id") == best_deck.deck_id
+                ]
+                gen_metrics["best_deck"] = aggregate_match_summaries(best_summaries)
+                self._write_json(out / f"gen_{gen:03d}_metrics.json", gen_metrics)
 
             stats = compute_fitness_stats(scored)
             print(

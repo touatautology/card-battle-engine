@@ -10,6 +10,7 @@ from typing import Any
 from card_battle.ai import GreedyAI
 from card_battle.engine import init_game, run_game
 from card_battle.models import Card, DeckDef, GameResult, MatchLog
+from card_battle.telemetry import MatchTelemetry
 
 
 def run_batch(
@@ -19,10 +20,12 @@ def run_batch(
     base_seed: int,
     output_dir: str | Path | None = None,
     trace: bool = False,
+    telemetry_enabled: bool = False,
 ) -> list[MatchLog]:
     """Run round-robin matches between all deck pairs."""
     agents = (GreedyAI(), GreedyAI())
     logs: list[MatchLog] = []
+    summaries: list[dict[str, Any]] = []
     pairs = list(combinations(range(len(decks)), 2))
 
     match_id = 0
@@ -30,16 +33,26 @@ def run_batch(
         for m in range(n_matches):
             seed = base_seed + match_id
             gs = init_game(card_db, decks[i], decks[j], seed)
-            log = run_game(gs, agents, trace=trace)
+            tm = MatchTelemetry() if telemetry_enabled else None
+            log = run_game(gs, agents, trace=trace, telemetry=tm)
             log.seed = seed  # type: ignore[misc]
             log.deck_ids = (decks[i].deck_id, decks[j].deck_id)  # type: ignore[misc]
             logs.append(log)
+            if tm is not None:
+                s = tm.to_summary()
+                s["deck_ids"] = [decks[i].deck_id, decks[j].deck_id]
+                summaries.append(s)
             match_id += 1
 
     if output_dir is not None:
         out = Path(output_dir)
         out.mkdir(parents=True, exist_ok=True)
         _write_logs(logs, out / "match_logs.json")
+        if telemetry_enabled and summaries:
+            from card_battle.metrics import aggregate_match_summaries
+            metrics = aggregate_match_summaries(summaries)
+            with open(out / "simulate_metrics.json", "w", encoding="utf-8") as f:
+                json.dump(metrics, f, indent=2, ensure_ascii=False)
 
     return logs
 

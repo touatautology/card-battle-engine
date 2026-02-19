@@ -41,6 +41,8 @@ def main(argv: list[str] | None = None) -> None:
     p_sim.add_argument("--output", default="output/", help="Output directory")
     p_sim.add_argument("--trace", action="store_true", help="Include play traces in log")
     p_sim.add_argument("--cards", default=str(DEFAULT_CARDS), help="Path to cards.json")
+    p_sim.add_argument("--telemetry", choices=["on", "off"], default="off",
+                        help="Enable match telemetry collection")
 
     # --- stats ---
     p_stats = sub.add_parser("stats", help="Show stats from match logs")
@@ -52,6 +54,8 @@ def main(argv: list[str] | None = None) -> None:
     p_evolve.add_argument("--output", default=None, help="Override output directory")
     p_evolve.add_argument("--generations", type=int, default=None, help="Override generations count")
     p_evolve.add_argument("--seed", type=int, default=None, help="Override global seed")
+    p_evolve.add_argument("--telemetry", choices=["on", "off"], default=None,
+                          help="Override telemetry setting")
 
     args = parser.parse_args(argv)
 
@@ -109,7 +113,11 @@ def _cmd_simulate(args: argparse.Namespace) -> None:
     decks = [load_deck(p, card_db) for p in sorted(set(deck_paths))]
     print(f"Loaded {len(decks)} decks: {[d.deck_id for d in decks]}")
 
-    logs = run_batch(card_db, decks, args.matches, args.seed, args.output, args.trace)
+    telemetry_on = getattr(args, "telemetry", "off") == "on"
+    logs = run_batch(
+        card_db, decks, args.matches, args.seed, args.output, args.trace,
+        telemetry_enabled=telemetry_on,
+    )
     stats = aggregate(logs)
     render_stats(stats)
 
@@ -151,5 +159,10 @@ def _cmd_evolve(args: argparse.Namespace) -> None:
         overrides["global_seed"] = args.seed
 
     config = EvolutionConfig.from_json(args.config, **overrides)
+
+    # CLI --telemetry overrides config
+    if args.telemetry is not None:
+        config.telemetry["enabled"] = (args.telemetry == "on")
+
     runner = EvolutionRunner(config)
     runner.run()

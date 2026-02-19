@@ -26,5 +26,7 @@
     "data/decks/midrange.json"
   ],
   "log_every_n": 1,
-  "top_n_summary": 5
+  "top_n_summary": 5,
+  "telemetry": {"enabled": true, "save_match_summaries": false},
+  "metrics": {"top_n_decks": 5}
 }

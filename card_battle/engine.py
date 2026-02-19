@@ -7,7 +7,7 @@ from collections import defaultdict
 from typing import TYPE_CHECKING
 
 from card_battle.actions import (
-    Action, EndTurn, GoToCombat, DeclareAttack, DeclareBlock,
+    Action, EndTurn, GoToCombat, DeclareAttack, DeclareBlock, PlayCard,
     get_legal_actions, apply_action,
 )
 from card_battle.effects import _draw_one
@@ -17,6 +17,7 @@ from card_battle.models import (
 
 if TYPE_CHECKING:
     from card_battle.ai import Agent
+    from card_battle.telemetry import MatchTelemetry
 
 MAX_TURNS = 50
 
@@ -105,7 +106,10 @@ def _start_turn(gs: GameState) -> GameResult | None:
     return None
 
 
-def _resolve_combat(gs: GameState) -> None:
+def _resolve_combat(
+    gs: GameState,
+    telemetry: "MatchTelemetry | None" = None,
+) -> None:
     """Resolve combat: simultaneous damage, then remove dead units."""
     assert gs.combat is not None
     attackers = gs.combat.attackers
@@ -122,6 +126,11 @@ def _resolve_combat(gs: GameState) -> None:
     unit_damage: dict[int, int] = defaultdict(int)
     player_damage = 0
 
+    # Telemetry accumulators
+    unblocked_atk_count = 0
+    unblocked_dmg = 0
+    trade_count = 0
+
     for a_uid in attackers:
         attacker = active_units.get(a_uid)
         if attacker is None:
@@ -134,12 +143,22 @@ def _resolve_combat(gs: GameState) -> None:
             if blocker is not None:
                 unit_damage[b_uid] += attacker.atk
                 unit_damage[a_uid] += blocker.atk
+                # Trade: both would die
+                if telemetry:
+                    atk_would_die = attacker.hp <= blocker.atk
+                    blk_would_die = blocker.hp <= attacker.atk
+                    if atk_would_die and blk_would_die:
+                        trade_count += 1
             else:
                 # Blocker gone — unblocked
                 player_damage += attacker.atk
+                unblocked_atk_count += 1
+                unblocked_dmg += attacker.atk
         else:
             # Unblocked — damage to defender player
             player_damage += attacker.atk
+            unblocked_atk_count += 1
+            unblocked_dmg += attacker.atk
 
     # Apply player damage
     defender_player.hp -= player_damage
@@ -150,9 +169,17 @@ def _resolve_combat(gs: GameState) -> None:
         if unit is not None:
             unit.hp -= dmg
 
+    # Count deaths before removing (for telemetry)
+    atk_deaths = 0
+    def_deaths = 0
     # Remove dead units from both boards
     for player in [active_player, defender_player]:
         dead = [u for u in player.board if u.hp <= 0]
+        if telemetry:
+            if player is active_player:
+                atk_deaths = len(dead)
+            else:
+                def_deaths = len(dead)
         for u in dead:
             player.board.remove(u)
             player.graveyard.append(u.card_id)
@@ -162,6 +189,20 @@ def _resolve_combat(gs: GameState) -> None:
         unit = active_units.get(a_uid)
         if unit is not None and unit.hp > 0:
             unit.can_attack = False
+
+    # Telemetry: report combat stats
+    if telemetry:
+        telemetry.on_combat_resolved(
+            gs,
+            atk_idx=gs.active_player,
+            def_idx=gs.opponent_idx(),
+            unblocked_atk_count=unblocked_atk_count,
+            unblocked_dmg=unblocked_dmg,
+            trade_count=trade_count,
+            atk_deaths=atk_deaths,
+            def_deaths=def_deaths,
+            player_damage=player_damage,
+        )
 
     # Clear combat state
     gs.combat = None
@@ -185,8 +226,12 @@ def run_game(
     gs: GameState,
     agents: tuple["Agent", "Agent"],
     trace: bool = False,
+    telemetry: "MatchTelemetry | None" = None,
 ) -> MatchLog:
     play_trace: list[dict] | None = [] if trace else None
+
+    if telemetry:
+        telemetry.on_game_start(gs)
 
     while gs.result is None:
         # Turn limit
@@ -202,9 +247,16 @@ def run_game(
 
         # Start turn
         result = _start_turn(gs)
+        if telemetry:
+            telemetry.on_turn_start(gs, gs.active_player)
         if result is not None:
+            # Deckout — no card drawn
             gs.result = result
             break
+        else:
+            # Successful draw
+            if telemetry:
+                telemetry.on_cards_drawn(gs, gs.active_player, 1, "turn_draw")
 
         # --- Main phase ---
         while gs.phase == "main" and gs.result is None:
@@ -216,7 +268,30 @@ def run_game(
                 gs.phase = "end"
                 break
 
+            # Telemetry: snapshot before applying PlayCard
+            if telemetry and isinstance(action, PlayCard):
+                p = gs.active()
+                opp = gs.opponent()
+                hand_size_before = len(p.hand)
+                opp_hp_before = opp.hp
+                card = gs.card_db[p.hand[action.hand_index]]
+
             apply_action(gs, action)
+
+            # Telemetry: record PlayCard effects
+            if telemetry and isinstance(action, PlayCard):
+                telemetry.on_card_played(gs, gs.active_player, card)
+                # Detect effect draws: cards drawn = hand_now - hand_before + 1
+                # (+1 because the played card was removed from hand)
+                p = gs.active()
+                opp = gs.opponent()
+                draws = len(p.hand) - hand_size_before + 1
+                if draws > 0:
+                    telemetry.on_cards_drawn(gs, gs.active_player, draws, "effect")
+                # Detect spell/effect damage to opponent
+                damage = opp_hp_before - opp.hp
+                if damage > 0:
+                    telemetry.on_spell_damage(gs, gs.active_player, damage)
 
             if gs.phase != "main":
                 break  # GoToCombat transitioned to combat_attack
@@ -234,6 +309,12 @@ def run_game(
             apply_action(gs, action)
             # DeclareAttack(empty) → phase="main" (combat cancelled)
 
+            # Telemetry: record attack declaration
+            if telemetry and isinstance(action, DeclareAttack):
+                telemetry.on_declare_attack(
+                    gs, gs.active_player, action.attacker_uids,
+                )
+
         # --- Combat block phase (defender acts) ---
         if gs.phase == "combat_block" and gs.result is None:
             legal = get_legal_actions(gs)
@@ -242,7 +323,11 @@ def run_game(
             _record_trace(play_trace, gs, action, defender_idx)
             apply_action(gs, action)
 
-            _resolve_combat(gs)
+            # Telemetry: record block declaration
+            if telemetry and isinstance(action, DeclareBlock):
+                telemetry.on_declare_block(gs, defender_idx, action.pairs)
+
+            _resolve_combat(gs, telemetry=telemetry)
 
             result = _check_winner(gs)
             if result is not None:
@@ -252,8 +337,22 @@ def run_game(
 
         # --- End phase / turn switch ---
         if gs.phase == "end" or gs.phase == "main":
+            # Telemetry: record turn end
+            if telemetry:
+                telemetry.on_turn_end(gs, gs.active_player)
             # main can happen if combat was cancelled
             gs.active_player = 1 - gs.active_player
+
+    # Telemetry: record game end
+    if telemetry and gs.result is not None:
+        reason = "turn_limit" if gs.turn >= MAX_TURNS else "normal"
+        # Detect deckout: loser is alive but has empty deck
+        if reason == "normal" and gs.result != GameResult.DRAW:
+            loser_idx = 0 if gs.result == GameResult.PLAYER_1_WIN else 1
+            loser = gs.players[loser_idx]
+            if loser.hp > 0 and not loser.deck:
+                reason = "deckout"
+        telemetry.on_game_end(gs, gs.result, reason)
 
     return MatchLog(
         seed=0,  # filled by caller
