@@ -75,7 +75,7 @@ def generate_candidates(
     mode_weights = config.get("mode_weights", {"suppress": 0.7, "support": 0.3})
     suppress_templates = config.get("suppress_templates", [])
     support_templates = config.get("support_templates", [])
-    max_cards = constraints.get("global", {}).get("max_new_cards", 50)
+    max_cards = config.get("base_candidates_max", constraints.get("global", {}).get("max_new_cards", 50))
     forbid_rules = constraints.get("global", {}).get("forbid", [])
     template_specs = constraints.get("templates", {})
 
@@ -179,6 +179,12 @@ def generate_candidates(
                         "support": pat_stats.get("support", 0),
                     }],
                     "heuristic": f"{mode}_{tmpl_name.lower()}_from_{pat_type}",
+                },
+                "lineage": {
+                    "origin": "base",
+                    "parent_id": None,
+                    "mutation_op": None,
+                    "mutation_params": None,
                 },
             }
             candidates.append(candidate)
@@ -447,6 +453,9 @@ def run_cardgen(
     constraints_path: str | Path,
     config_path: str | Path,
     output_dir: str | Path,
+    mutations_override: str | None = None,
+    mut_per_base_override: int | None = None,
+    min_distance_override: float | None = None,
 ) -> dict[str, Any]:
     """Run the full card generation pipeline.
 
@@ -472,14 +481,42 @@ def run_cardgen(
     with open(config_path, encoding="utf-8") as f:
         config = json.load(f)
 
+    # Apply CLI overrides
+    if mutations_override is not None:
+        config.setdefault("mutations", {})["enabled"] = (mutations_override == "on")
+    if mut_per_base_override is not None:
+        config.setdefault("mutations", {})["per_base"] = mut_per_base_override
+    if min_distance_override is not None:
+        config.setdefault("diversity", {})["min_distance"] = min_distance_override
+
     seed = config.get("seed", 42)
 
-    # 1. Generate candidates
+    # 1. Generate base candidates
     candidates = generate_candidates(patterns, constraints, config)
-    _write_json(output_dir / "card_candidates.json", candidates)
-    print(f"Generated {len(candidates)} candidate cards")
+    base_count = len(candidates)
+    print(f"Generated {base_count} base candidate cards")
 
-    # 2. Adoption test
+    # 2. Mutation stage
+    total_mutated = 0
+    mut_cfg = config.get("mutations", {})
+    if mut_cfg.get("enabled", False):
+        from card_battle.cardmut import generate_mutations, dedupe_and_filter_diversity
+
+        mutated = generate_mutations(candidates, constraints, config)
+        total_mutated = len(mutated)
+        candidates = candidates + mutated
+        print(f"  + {total_mutated} mutated candidates ({len(candidates)} total)")
+
+        # 3. Diversity filter
+        div_cfg = config.get("diversity", {})
+        if div_cfg.get("enabled", False):
+            candidates = dedupe_and_filter_diversity(candidates, constraints, config)
+            print(f"  After diversity filter: {len(candidates)} candidates")
+
+    total_after_diversity = len(candidates)
+    _write_json(output_dir / "card_candidates.json", candidates)
+
+    # 4. Adoption test
     reports: list[dict[str, Any]] = []
     for i, cand in enumerate(candidates):
         print(f"  Testing candidate {i+1}/{len(candidates)}: {cand['id']}")
@@ -488,7 +525,7 @@ def run_cardgen(
 
     _write_json(output_dir / "adoption_report.json", reports)
 
-    # 3. Select accepted cards
+    # 5. Select accepted cards
     selected = []
     for report in reports:
         if check_acceptance(report, config):
@@ -505,7 +542,7 @@ def run_cardgen(
     _write_json(output_dir / "selected_cards.json", selected)
     print(f"Selected {len(selected)} cards (from {len(reports)} candidates)")
 
-    # 4. Run meta
+    # 6. Run meta
     run_meta = {
         "seed": seed,
         "patterns_path": str(patterns_path),
@@ -514,12 +551,18 @@ def run_cardgen(
         "constraints_path": str(constraints_path),
         "config_path": str(config_path),
         "total_candidates": len(candidates),
+        "total_base": base_count,
+        "total_mutated": total_mutated,
+        "total_after_diversity": total_after_diversity,
         "total_selected": len(selected),
     }
     _write_json(output_dir / "run_meta.json", run_meta)
 
     return {
         "total_candidates": len(candidates),
+        "total_base": base_count,
+        "total_mutated": total_mutated,
+        "total_after_diversity": total_after_diversity,
         "total_reports": len(reports),
         "total_selected": len(selected),
     }

@@ -91,6 +91,12 @@ def main(argv: list[str] | None = None) -> None:
                        help="Path to constraints JSON")
     p_cg.add_argument("--config", required=True, help="Path to generation config JSON")
     p_cg.add_argument("--output", default="output/cardgen", help="Output directory")
+    p_cg.add_argument("--mutations", choices=["on", "off"], default=None,
+                       help="Override mutations enabled setting")
+    p_cg.add_argument("--mut-per-base", type=int, default=None,
+                       help="Override mutations per base candidate")
+    p_cg.add_argument("--min-distance", type=float, default=None,
+                       help="Override diversity min distance")
 
     # --- promote ---
     p_promo = sub.add_parser("promote", help="Promote selected cards into the card pool")
@@ -321,6 +327,9 @@ def _cmd_cardgen(args: argparse.Namespace) -> None:
         constraints_path=args.constraints,
         config_path=args.config,
         output_dir=args.output,
+        mutations_override=args.mutations,
+        mut_per_base_override=args.mut_per_base,
+        min_distance_override=args.min_distance,
     )
     print(f"\nCardgen complete: {result['total_candidates']} candidates, "
           f"{result['total_selected']} selected")
