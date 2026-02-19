@@ -4,13 +4,15 @@ from __future__ import annotations
 
 from typing import Any
 
-from card_battle.actions import Action, PlayCard, Attack, EndTurn
+from card_battle.actions import (
+    Action, PlayCard, GoToCombat, DeclareAttack, DeclareBlock, EndTurn,
+)
 from card_battle.models import GameState
 
 
 def render_board(gs: GameState) -> None:
     print(f"\n{'='*50}")
-    print(f"  Turn {gs.turn}  |  Active: Player {gs.active_player}")
+    print(f"  Turn {gs.turn}  |  Active: Player {gs.active_player}  |  Phase: {gs.phase}")
     print(f"{'='*50}")
 
     for pi in range(2):
@@ -38,9 +40,31 @@ def render_actions(actions: list[Action], gs: GameState) -> None:
                 card_id = p.hand[idx]
                 card = gs.card_db[card_id]
                 print(f"    [{i}] Play: {card.name} (cost {card.cost})")
-            case Attack(board_index=idx):
-                unit = p.board[idx]
-                print(f"    [{i}] Attack with {unit.card_id} ({unit.atk} ATK)")
+            case GoToCombat():
+                print(f"    [{i}] Go to Combat")
+            case DeclareAttack(attacker_uids=uids):
+                if not uids:
+                    print(f"    [{i}] Cancel combat (attack with nobody)")
+                else:
+                    unit_map = {u.uid: u for u in p.board}
+                    names = ", ".join(
+                        f"{unit_map[uid].card_id}({unit_map[uid].atk}ATK)"
+                        for uid in uids if uid in unit_map
+                    )
+                    print(f"    [{i}] Attack with: {names}")
+            case DeclareBlock(pairs=pairs):
+                if not pairs:
+                    print(f"    [{i}] No blocks")
+                else:
+                    defender = gs.opponent()
+                    b_map = {u.uid: u for u in defender.board}
+                    a_map = {u.uid: u for u in p.board}
+                    descs = []
+                    for b_uid, a_uid in pairs:
+                        b_name = b_map[b_uid].card_id if b_uid in b_map else f"uid{b_uid}"
+                        a_name = a_map[a_uid].card_id if a_uid in a_map else f"uid{a_uid}"
+                        descs.append(f"{b_name} blocks {a_name}")
+                    print(f"    [{i}] Block: {', '.join(descs)}")
             case EndTurn():
                 print(f"    [{i}] End Turn")
     print()

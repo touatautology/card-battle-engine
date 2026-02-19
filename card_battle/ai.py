@@ -5,7 +5,10 @@ from __future__ import annotations
 import copy
 from abc import ABC, abstractmethod
 
-from card_battle.actions import Action, EndTurn, Attack, PlayCard, apply_action, get_legal_actions
+from card_battle.actions import (
+    Action, EndTurn, PlayCard, GoToCombat, DeclareAttack, DeclareBlock,
+    apply_action,
+)
 from card_battle.models import GameState
 
 
@@ -40,10 +43,40 @@ def _evaluate(gs: GameState, player_idx: int) -> float:
     return score
 
 
+def _simulate_combat_lookahead(sim: GameState, action: Action) -> None:
+    """After applying an action on a sim copy, look ahead through combat."""
+    from card_battle.engine import _resolve_combat
+
+    if isinstance(action, GoToCombat):
+        # Simulate: attack all → no blocks → resolve
+        attackable = [u.uid for u in sim.active().board if u.can_attack]
+        if attackable:
+            apply_action(sim, DeclareAttack(attacker_uids=tuple(attackable)))
+            apply_action(sim, DeclareBlock(pairs=()))
+            _resolve_combat(sim)
+        else:
+            sim.phase = "main"
+            sim.combat = None
+
+    elif isinstance(action, DeclareAttack) and action.attacker_uids:
+        # Simulate: no blocks → resolve
+        apply_action(sim, DeclareBlock(pairs=()))
+        _resolve_combat(sim)
+
+    elif isinstance(action, DeclareBlock):
+        # Resolve combat with the chosen blocks
+        _resolve_combat(sim)
+
+
 class GreedyAI(Agent):
     def choose_action(self, gs: GameState, legal_actions: list[Action]) -> Action:
-        player_idx = gs.active_player
-        best_action = EndTurn()
+        # In combat_block, the defender is choosing (not active_player)
+        if gs.phase == "combat_block":
+            player_idx = gs.opponent_idx()
+        else:
+            player_idx = gs.active_player
+
+        best_action = legal_actions[0]
         best_score = _evaluate(gs, player_idx)
 
         for action in legal_actions:
@@ -51,6 +84,7 @@ class GreedyAI(Agent):
                 continue
             sim = copy.deepcopy(gs)
             apply_action(sim, action)
+            _simulate_combat_lookahead(sim, action)
             score = _evaluate(sim, player_idx)
             if score > best_score:
                 best_score = score

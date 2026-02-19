@@ -59,6 +59,12 @@ class UnitInstance:
 
 
 @dataclass
+class CombatState:
+    attackers: list[int] = field(default_factory=list)       # attacker uids
+    blocks: dict[int, int] = field(default_factory=dict)     # attacker_uid -> blocker_uid
+
+
+@dataclass
 class PlayerState:
     hp: int = 20
     mana_max: int = 0
@@ -92,6 +98,8 @@ class GameState:
     result: GameResult | None
     rng: random.Random
     card_db: dict[str, Card]
+    phase: str = "main"                   # "main" | "combat_attack" | "combat_block" | "end"
+    combat: CombatState | None = None
 
     def opponent_idx(self) -> int:
         return 1 - self.active_player

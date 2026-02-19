@@ -3,9 +3,13 @@
 from __future__ import annotations
 
 import random
+from collections import defaultdict
 from typing import TYPE_CHECKING
 
-from card_battle.actions import Action, EndTurn, get_legal_actions, apply_action
+from card_battle.actions import (
+    Action, EndTurn, GoToCombat, DeclareAttack, DeclareBlock,
+    get_legal_actions, apply_action,
+)
 from card_battle.effects import _draw_one
 from card_battle.models import (
     Card, DeckDef, GameResult, GameState, MatchLog, PlayerState,
@@ -78,6 +82,8 @@ def _check_winner(gs: GameState) -> GameResult | None:
 
 def _start_turn(gs: GameState) -> GameResult | None:
     gs.turn += 1
+    gs.phase = "main"
+    gs.combat = None
     p = gs.active()
 
     # Increase mana (cap 10)
@@ -97,6 +103,82 @@ def _start_turn(gs: GameState) -> GameResult | None:
         unit.can_attack = True
 
     return None
+
+
+def _resolve_combat(gs: GameState) -> None:
+    """Resolve combat: simultaneous damage, then remove dead units."""
+    assert gs.combat is not None
+    attackers = gs.combat.attackers
+    blocks = gs.combat.blocks
+
+    active_player = gs.active()
+    defender_player = gs.opponent()
+
+    # Build uid -> unit lookup for both sides
+    active_units = {u.uid: u for u in active_player.board}
+    defender_units = {u.uid: u for u in defender_player.board}
+
+    # Buffer damage
+    unit_damage: dict[int, int] = defaultdict(int)
+    player_damage = 0
+
+    for a_uid in attackers:
+        attacker = active_units.get(a_uid)
+        if attacker is None:
+            continue  # attacker died to spell or was removed
+
+        if a_uid in blocks:
+            # Blocked — mutual damage
+            b_uid = blocks[a_uid]
+            blocker = defender_units.get(b_uid)
+            if blocker is not None:
+                unit_damage[b_uid] += attacker.atk
+                unit_damage[a_uid] += blocker.atk
+            else:
+                # Blocker gone — unblocked
+                player_damage += attacker.atk
+        else:
+            # Unblocked — damage to defender player
+            player_damage += attacker.atk
+
+    # Apply player damage
+    defender_player.hp -= player_damage
+
+    # Apply unit damage
+    for uid, dmg in unit_damage.items():
+        unit = active_units.get(uid) or defender_units.get(uid)
+        if unit is not None:
+            unit.hp -= dmg
+
+    # Remove dead units from both boards
+    for player in [active_player, defender_player]:
+        dead = [u for u in player.board if u.hp <= 0]
+        for u in dead:
+            player.board.remove(u)
+            player.graveyard.append(u.card_id)
+
+    # Mark attackers as having attacked (can_attack = False)
+    for a_uid in attackers:
+        unit = active_units.get(a_uid)
+        if unit is not None and unit.hp > 0:
+            unit.can_attack = False
+
+    # Clear combat state
+    gs.combat = None
+
+
+def _record_trace(
+    play_trace: list[dict] | None,
+    gs: GameState,
+    action: Action,
+    player: int,
+) -> None:
+    if play_trace is not None:
+        play_trace.append({
+            "turn": gs.turn,
+            "player": player,
+            "action": str(action),
+        })
 
 
 def run_game(
@@ -124,33 +206,54 @@ def run_game(
             gs.result = result
             break
 
-        agent = agents[gs.active_player]
-
-        # Main phase: choose actions until EndTurn
-        while gs.result is None:
+        # --- Main phase ---
+        while gs.phase == "main" and gs.result is None:
             legal = get_legal_actions(gs)
-            action = agent.choose_action(gs, legal)
-
-            if play_trace is not None:
-                play_trace.append({
-                    "turn": gs.turn,
-                    "player": gs.active_player,
-                    "action": str(action),
-                })
+            action = agents[gs.active_player].choose_action(gs, legal)
+            _record_trace(play_trace, gs, action, gs.active_player)
 
             if isinstance(action, EndTurn):
+                gs.phase = "end"
                 break
 
             apply_action(gs, action)
 
-            # Check win after every action
+            if gs.phase != "main":
+                break  # GoToCombat transitioned to combat_attack
+
             result = _check_winner(gs)
             if result is not None:
                 gs.result = result
                 break
 
-        # Switch active player
-        gs.active_player = 1 - gs.active_player
+        # --- Combat attack phase ---
+        if gs.phase == "combat_attack" and gs.result is None:
+            legal = get_legal_actions(gs)
+            action = agents[gs.active_player].choose_action(gs, legal)
+            _record_trace(play_trace, gs, action, gs.active_player)
+            apply_action(gs, action)
+            # DeclareAttack(empty) → phase="main" (combat cancelled)
+
+        # --- Combat block phase (defender acts) ---
+        if gs.phase == "combat_block" and gs.result is None:
+            legal = get_legal_actions(gs)
+            defender_idx = gs.opponent_idx()
+            action = agents[defender_idx].choose_action(gs, legal)
+            _record_trace(play_trace, gs, action, defender_idx)
+            apply_action(gs, action)
+
+            _resolve_combat(gs)
+
+            result = _check_winner(gs)
+            if result is not None:
+                gs.result = result
+
+            gs.phase = "end"
+
+        # --- End phase / turn switch ---
+        if gs.phase == "end" or gs.phase == "main":
+            # main can happen if combat was cancelled
+            gs.active_player = 1 - gs.active_player
 
     return MatchLog(
         seed=0,  # filled by caller

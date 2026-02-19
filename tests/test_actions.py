@@ -1,13 +1,15 @@
-"""Tests for Phase 3: Actions."""
+"""Tests for Phase 3: Actions (v0.2 with blocking)."""
 
 import random
 import unittest
 
 from card_battle.actions import (
-    Action, Attack, EndTurn, PlayCard, BOARD_LIMIT,
-    apply_action, get_legal_actions,
+    Action, EndTurn, GoToCombat, DeclareAttack, DeclareBlock, PlayCard,
+    BOARD_LIMIT, apply_action, get_legal_actions,
 )
-from card_battle.models import Card, GameState, PlayerState, UnitInstance
+from card_battle.models import (
+    Card, CombatState, GameState, PlayerState, UnitInstance,
+)
 
 
 def _card_db() -> dict[str, Card]:
@@ -33,7 +35,11 @@ def _make_gs(**kwargs) -> GameState:
     return GameState(**defaults)
 
 
-class TestGetLegalActions(unittest.TestCase):
+# ---------------------------------------------------------------------------
+# Main phase legal actions
+# ---------------------------------------------------------------------------
+
+class TestGetLegalActionsMainPhase(unittest.TestCase):
     def test_empty_hand_only_end_turn(self):
         gs = _make_gs()
         actions = get_legal_actions(gs)
@@ -61,7 +67,6 @@ class TestGetLegalActions(unittest.TestCase):
             for i in range(BOARD_LIMIT)
         ]
         actions = get_legal_actions(gs)
-        # Can't play unit, but EndTurn is always there
         self.assertNotIn(PlayCard(hand_index=0), actions)
 
     def test_board_full_can_play_spell(self):
@@ -74,22 +79,99 @@ class TestGetLegalActions(unittest.TestCase):
         actions = get_legal_actions(gs)
         self.assertIn(PlayCard(hand_index=0), actions)
 
-    def test_attack_available(self):
+    def test_go_to_combat_available(self):
         gs = _make_gs()
         gs.players[0].board = [
             UnitInstance(uid=1, card_id="soldier", atk=2, hp=2, can_attack=True),
         ]
         actions = get_legal_actions(gs)
-        self.assertIn(Attack(board_index=0), actions)
+        self.assertIn(GoToCombat(), actions)
 
-    def test_summoning_sickness(self):
+    def test_summoning_sickness_no_combat(self):
         gs = _make_gs()
         gs.players[0].board = [
             UnitInstance(uid=1, card_id="soldier", atk=2, hp=2, can_attack=False),
         ]
         actions = get_legal_actions(gs)
-        self.assertNotIn(Attack(board_index=0), actions)
+        self.assertNotIn(GoToCombat(), actions)
 
+
+# ---------------------------------------------------------------------------
+# Combat attack phase
+# ---------------------------------------------------------------------------
+
+class TestGetLegalActionsCombatAttack(unittest.TestCase):
+    def test_attack_candidates_include_empty(self):
+        gs = _make_gs()
+        gs.phase = "combat_attack"
+        gs.combat = CombatState()
+        gs.players[0].board = [
+            UnitInstance(uid=1, card_id="soldier", atk=2, hp=2, can_attack=True),
+        ]
+        actions = get_legal_actions(gs)
+        self.assertIn(DeclareAttack(attacker_uids=()), actions)
+
+    def test_attack_candidates_include_all(self):
+        gs = _make_gs()
+        gs.phase = "combat_attack"
+        gs.combat = CombatState()
+        gs.players[0].board = [
+            UnitInstance(uid=1, card_id="soldier", atk=2, hp=2, can_attack=True),
+            UnitInstance(uid=2, card_id="soldier", atk=2, hp=2, can_attack=True),
+        ]
+        actions = get_legal_actions(gs)
+        self.assertIn(DeclareAttack(attacker_uids=(1, 2)), actions)
+
+    def test_attack_candidates_single(self):
+        gs = _make_gs()
+        gs.phase = "combat_attack"
+        gs.combat = CombatState()
+        gs.players[0].board = [
+            UnitInstance(uid=1, card_id="soldier", atk=2, hp=2, can_attack=True),
+            UnitInstance(uid=2, card_id="soldier", atk=3, hp=3, can_attack=True),
+        ]
+        actions = get_legal_actions(gs)
+        self.assertIn(DeclareAttack(attacker_uids=(1,)), actions)
+        self.assertIn(DeclareAttack(attacker_uids=(2,)), actions)
+
+
+# ---------------------------------------------------------------------------
+# Combat block phase
+# ---------------------------------------------------------------------------
+
+class TestGetLegalActionsCombatBlock(unittest.TestCase):
+    def test_block_candidates_include_no_block(self):
+        gs = _make_gs()
+        gs.phase = "combat_block"
+        gs.combat = CombatState(attackers=[1])
+        gs.players[0].board = [
+            UnitInstance(uid=1, card_id="soldier", atk=2, hp=2),
+        ]
+        gs.players[1].board = [
+            UnitInstance(uid=10, card_id="soldier", atk=2, hp=2),
+        ]
+        actions = get_legal_actions(gs)
+        self.assertIn(DeclareBlock(pairs=()), actions)
+
+    def test_block_candidates_include_block(self):
+        gs = _make_gs()
+        gs.phase = "combat_block"
+        gs.combat = CombatState(attackers=[1])
+        gs.players[0].board = [
+            UnitInstance(uid=1, card_id="soldier", atk=2, hp=2),
+        ]
+        gs.players[1].board = [
+            UnitInstance(uid=10, card_id="soldier", atk=2, hp=2),
+        ]
+        actions = get_legal_actions(gs)
+        # Should have some block option with (10, 1) pair
+        block_actions = [a for a in actions if isinstance(a, DeclareBlock) and a.pairs]
+        self.assertTrue(len(block_actions) > 0)
+
+
+# ---------------------------------------------------------------------------
+# Apply action
+# ---------------------------------------------------------------------------
 
 class TestApplyAction(unittest.TestCase):
     def test_play_unit(self):
@@ -111,14 +193,37 @@ class TestApplyAction(unittest.TestCase):
         self.assertEqual(gs.players[1].hp, 17)
         self.assertIn("bolt", gs.players[0].graveyard)
 
-    def test_attack(self):
+    def test_go_to_combat(self):
         gs = _make_gs()
+        apply_action(gs, GoToCombat())
+        self.assertEqual(gs.phase, "combat_attack")
+        self.assertIsNotNone(gs.combat)
+
+    def test_declare_attack(self):
+        gs = _make_gs()
+        gs.phase = "combat_attack"
+        gs.combat = CombatState()
         gs.players[0].board = [
-            UnitInstance(uid=1, card_id="soldier", atk=3, hp=2, can_attack=True),
+            UnitInstance(uid=1, card_id="soldier", atk=2, hp=2, can_attack=True),
         ]
-        apply_action(gs, Attack(board_index=0))
-        self.assertEqual(gs.players[1].hp, 17)
-        self.assertFalse(gs.players[0].board[0].can_attack)
+        apply_action(gs, DeclareAttack(attacker_uids=(1,)))
+        self.assertEqual(gs.combat.attackers, [1])
+        self.assertEqual(gs.phase, "combat_block")
+
+    def test_declare_attack_empty_cancels(self):
+        gs = _make_gs()
+        gs.phase = "combat_attack"
+        gs.combat = CombatState()
+        apply_action(gs, DeclareAttack(attacker_uids=()))
+        self.assertEqual(gs.phase, "main")
+        self.assertIsNone(gs.combat)
+
+    def test_declare_block(self):
+        gs = _make_gs()
+        gs.phase = "combat_block"
+        gs.combat = CombatState(attackers=[1])
+        apply_action(gs, DeclareBlock(pairs=((10, 1),)))
+        self.assertEqual(gs.combat.blocks, {1: 10})
 
 
 if __name__ == "__main__":

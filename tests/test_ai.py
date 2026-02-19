@@ -1,11 +1,11 @@
-"""Tests for Phase 6: AI agents."""
+"""Tests for Phase 6: AI agents (v0.2 with blocking)."""
 
 import random
 import unittest
 
-from card_battle.actions import Attack, EndTurn, PlayCard
+from card_battle.actions import EndTurn, GoToCombat, DeclareAttack, PlayCard
 from card_battle.ai import GreedyAI, _evaluate
-from card_battle.models import Card, GameState, PlayerState, UnitInstance
+from card_battle.models import Card, CombatState, GameState, PlayerState, UnitInstance
 
 
 def _card_db() -> dict[str, Card]:
@@ -35,7 +35,6 @@ def _make_gs(**kwargs) -> GameState:
 class TestEvaluate(unittest.TestCase):
     def test_initial_state_symmetric(self):
         gs = _make_gs()
-        # Both players have same HP, no board → score is 0 + hand bonus
         score = _evaluate(gs, 0)
         self.assertIsInstance(score, float)
 
@@ -60,14 +59,14 @@ class TestGreedyAI(unittest.TestCase):
         action = ai.choose_action(gs, [PlayCard(hand_index=0), EndTurn()])
         self.assertEqual(action, PlayCard(hand_index=0))
 
-    def test_prefers_attack(self):
+    def test_prefers_go_to_combat(self):
         gs = _make_gs()
         gs.players[0].board = [
             UnitInstance(uid=1, card_id="soldier", atk=2, hp=2, can_attack=True),
         ]
         ai = GreedyAI()
-        action = ai.choose_action(gs, [Attack(board_index=0), EndTurn()])
-        self.assertEqual(action, Attack(board_index=0))
+        action = ai.choose_action(gs, [GoToCombat(), EndTurn()])
+        self.assertEqual(action, GoToCombat())
 
     def test_returns_end_turn_when_no_benefit(self):
         gs = _make_gs()
